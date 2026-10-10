@@ -1,28 +1,32 @@
 import { useEffect, useRef, useState } from 'react';
 import {
-  ArrowRight,
-  ArrowDown,
-  Layers,
   Activity,
-  GitBranch,
+  ArrowDown,
+  ArrowRight,
   ChevronDown,
-  X,
+  Eye,
+  GitBranch,
+  Layers,
+  ListChecks,
   Menu,
+  ShieldCheck,
+  Users,
+  X,
 } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import { useReveal } from '@/hooks/useReveal';
+import { usePrefersReducedMotion } from '@/hooks/useHooks';
 
-const HERO_POSTER = 'https://images.pexels.com/photos/28589263/pexels-photo-28589263.jpeg?auto=compress&cs=tinysrgb&w=1920';
-const HERO_VIDEO = import.meta.env.VITE_NEXORA_HERO_VIDEO || '/videos/nexora-hero.mp4';
-
-const SECTION_POSTER = 'https://images.pexels.com/photos/17187918/pexels-photo-17187918.jpeg?auto=compress&cs=tinysrgb&w=1600';
+const HERO_POSTER = '/videos/nexora-hero.mp4';
+const VIDEO_SRC = '/videos/nexora-hero.mp4';
 
 function scrollToId(id: string) {
   const el = document.getElementById(id);
   if (el) el.scrollIntoView({ behavior: 'smooth' });
 }
 
-export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void }) {
+export function HomePage({ onEnter }: { onEnter: () => void }) {
+  const reduced = usePrefersReducedMotion();
   const [videoOk, setVideoOk] = useState(true);
   const [menuOpen, setMenuOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -35,21 +39,23 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
     return () => v.removeEventListener('error', handleError);
   }, []);
 
+  // Mobile menu: lock scroll only while open, always release on unmount.
   useEffect(() => {
-    if (menuOpen) {
-      document.body.style.overflow = 'hidden';
-    } else {
+    if (menuOpen) document.body.style.overflow = 'hidden';
+    else document.body.style.overflow = '';
+    return () => {
       document.body.style.overflow = '';
-    }
-    return () => { document.body.style.overflow = ''; };
+    };
   }, [menuOpen]);
+
+  const closeMenu = () => setMenuOpen(false);
 
   return (
     <div className="min-h-screen bg-ivory">
-      {/* === HERO === */}
-      <section className="relative h-screen min-h-[680px] w-full overflow-hidden bg-ink">
-        {/* Background video / poster fallback */}
-        {videoOk ? (
+      {/* ================= HERO ================= */}
+      <section className="relative h-[100svh] min-h-[620px] w-full overflow-hidden bg-ink">
+        {/* Background video / static fallback */}
+        {videoOk && !reduced ? (
           <video
             ref={videoRef}
             autoPlay
@@ -59,46 +65,57 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
             preload="metadata"
             poster={HERO_POSTER}
             onError={() => setVideoOk(false)}
-            className="absolute inset-0 h-full w-full object-cover object-center opacity-60 motion-reduce:opacity-40"
+            className="pointer-events-none absolute inset-0 z-0 h-full w-full object-cover object-center opacity-55"
             aria-hidden="true"
             tabIndex={-1}
           >
-            <source src={HERO_VIDEO} type="video/mp4" />
+            <source src={VIDEO_SRC} type="video/mp4" />
           </video>
         ) : (
+          /* Matching static backdrop so the hero never looks broken */
           <div
-            className="absolute inset-0 h-full w-full bg-cover bg-center opacity-50 motion-reduce:opacity-40"
-            style={{ backgroundImage: `url(${HERO_POSTER})` }}
+            className="pointer-events-none absolute inset-0 z-0 bg-cover bg-center opacity-45"
+            style={{
+              backgroundImage: `url(${VIDEO_SRC})`,
+              backgroundColor: '#111713',
+            }}
             aria-hidden="true"
           />
         )}
 
-        {/* Gradient overlays for text contrast */}
-        <div className="absolute inset-0 bg-gradient-to-b from-ink/70 via-ink/50 to-ink/90" aria-hidden="true" />
-        <div className="absolute inset-0 bg-gradient-to-r from-ink/60 to-transparent" aria-hidden="true" />
-        <div className="absolute inset-x-0 bottom-0 h-32 bg-gradient-to-b from-transparent to-ink" aria-hidden="true" />
+        {/* Forest/charcoal overlays keep text readable without muddying the footage */}
+        <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-b from-ink/70 via-ink/40 to-ink/95" aria-hidden="true" />
+        <div className="pointer-events-none absolute inset-0 z-0 bg-gradient-to-r from-ink/70 via-transparent to-ink/30" aria-hidden="true" />
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 z-0 h-40 bg-gradient-to-b from-transparent to-ink" aria-hidden="true" />
 
-        {/* Nav */}
+        {/* Nav — above the video */}
         <nav className="relative z-20 mx-auto flex max-w-7xl items-center justify-between px-6 py-5 lg:px-10" aria-label="Main navigation">
           <Logo theme="dark" />
           <div className="hidden items-center gap-8 md:flex">
-            <button onClick={() => scrollToId('product')} className="text-sm font-medium text-ivory/80 transition-colors hover:text-lime">
-              Product
-            </button>
-            <button onClick={() => scrollToId('workflow')} className="text-sm font-medium text-ivory/80 transition-colors hover:text-lime">
-              How it works
-            </button>
-            <button onClick={() => scrollToId('team')} className="text-sm font-medium text-ivory/80 transition-colors hover:text-lime">
-              Collaboration
-            </button>
-            <button onClick={onEnterWorkspace} className="text-sm font-medium text-ivory/80 transition-colors hover:text-lime">
+            {[
+              { label: 'Product', target: 'product' },
+              { label: 'How it works', target: 'workflow' },
+              { label: 'Collaboration', target: 'roles' },
+            ].map((item) => (
+              <button
+                key={item.target}
+                onClick={() => scrollToId(item.target)}
+                className="text-sm font-medium text-ivory/80 transition-colors hover:text-lime"
+              >
+                {item.label}
+              </button>
+            ))}
+            <button onClick={onEnter} className="text-sm font-medium text-ivory/80 transition-colors hover:text-lime">
               Sign in
             </button>
           </div>
           <div className="hidden md:block">
-            <button onClick={onEnterWorkspace} className="inline-flex items-center gap-2 rounded-lg bg-lime px-5 py-2.5 text-sm font-semibold text-ink transition-all duration-300 ease-smooth hover:bg-lime-dark hover:shadow-lg active:scale-[0.98]">
+            <button
+              onClick={onEnter}
+              className="group inline-flex items-center gap-2 rounded-lg bg-lime px-5 py-2.5 text-sm font-semibold text-ink transition-all duration-300 ease-smooth hover:bg-lime-dark hover:shadow-lg active:scale-[0.98]"
+            >
               Open workspace
-              <ArrowRight size={15} />
+              <ArrowRight size={15} className="transition-transform duration-200 group-hover:translate-x-0.5" />
             </button>
           </div>
           <button
@@ -116,42 +133,75 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
           <div className="fixed inset-0 z-50 bg-ink md:hidden" role="dialog" aria-modal="true" aria-label="Navigation menu">
             <div className="flex items-center justify-between px-6 py-5">
               <Logo theme="dark" />
-              <button onClick={() => setMenuOpen(false)} aria-label="Close menu" className="text-ivory">
+              <button onClick={closeMenu} aria-label="Close menu" className="text-ivory">
                 <X size={24} />
               </button>
             </div>
             <div className="flex flex-col gap-6 px-6 pt-8">
-              <button onClick={() => { scrollToId('product'); setMenuOpen(false); }} className="text-left text-lg font-display text-ivory/90">Product</button>
-              <button onClick={() => { scrollToId('workflow'); setMenuOpen(false); }} className="text-left text-lg font-display text-ivory/90">How it works</button>
-              <button onClick={() => { scrollToId('team'); setMenuOpen(false); }} className="text-left text-lg font-display text-ivory/90">Collaboration</button>
-              <button onClick={() => { onEnterWorkspace(); setMenuOpen(false); }} className="text-left text-lg font-display text-lime">Sign in</button>
-              <button onClick={() => { onEnterWorkspace(); setMenuOpen(false); }} className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-lime px-5 py-3 text-sm font-semibold text-ink">
+              {[
+                { label: 'Product', target: 'product' },
+                { label: 'How it works', target: 'workflow' },
+                { label: 'Collaboration', target: 'roles' },
+              ].map((item) => (
+                <button
+                  key={item.target}
+                  onClick={() => {
+                    closeMenu();
+                    scrollToId(item.target);
+                  }}
+                  className="text-left text-lg font-display text-ivory/90"
+                >
+                  {item.label}
+                </button>
+              ))}
+              <button
+                onClick={() => {
+                  closeMenu();
+                  onEnter();
+                }}
+                className="text-left text-lg font-display text-lime"
+              >
+                Sign in
+              </button>
+              <button
+                onClick={() => {
+                  closeMenu();
+                  onEnter();
+                }}
+                className="mt-4 inline-flex items-center justify-center gap-2 rounded-lg bg-lime px-5 py-3 text-sm font-semibold text-ink"
+              >
                 Open workspace <ArrowRight size={15} />
               </button>
             </div>
           </div>
         )}
 
-        {/* Hero content */}
+        {/* Hero content — above the video */}
         <div className="relative z-10 mx-auto flex h-[calc(100%-76px)] max-w-7xl flex-col justify-center px-6 lg:px-10">
           <div className="max-w-3xl">
             <p className="animate-fade-in-down text-xs font-semibold uppercase tracking-eyebrow text-lime">
-              The Live Project Command Center
+              Nexora by Neostats
             </p>
             <h1 className="mt-6 animate-fade-in-up font-display text-display-2xl text-ivory text-balance">
               Every moving part.
               <br />
-              One clear picture.
+              <span className="text-ivory/85 italic">One clear picture.</span>
             </h1>
             <p className="mt-7 max-w-xl animate-fade-in-up text-lg text-ivory/75 leading-relaxed animate-delay-200 text-pretty">
-              See what is moving, what is blocked, and what changed — without chasing updates across your team.
+              See what is moving, what is blocked, and what changed — live, from a single command center, without chasing updates across your team.
             </p>
             <div className="mt-10 flex animate-fade-in-up animate-delay-300 flex-col gap-3 sm:flex-row">
-              <button onClick={onEnterWorkspace} className="inline-flex items-center justify-center gap-2 rounded-lg bg-lime px-6 py-3.5 text-sm font-semibold text-ink transition-all duration-300 ease-smooth hover:bg-lime-dark hover:shadow-xl active:scale-[0.98]">
-                Open workspace
-                <ArrowRight size={16} />
+              <button
+                onClick={onEnter}
+                className="group inline-flex items-center justify-center gap-2 rounded-lg bg-lime px-7 py-3.5 text-sm font-semibold text-ink transition-all duration-300 ease-smooth hover:bg-lime-dark hover:shadow-xl active:scale-[0.98]"
+              >
+                Open the workspace
+                <ArrowRight size={16} className="transition-transform duration-200 group-hover:translate-x-0.5" />
               </button>
-              <button onClick={() => scrollToId('workflow')} className="inline-flex items-center justify-center gap-2 rounded-lg border border-ivory/25 px-6 py-3.5 text-sm font-semibold text-ivory transition-all duration-300 ease-smooth hover:bg-ivory/10 active:scale-[0.98]">
+              <button
+                onClick={() => scrollToId('workflow')}
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-ivory/25 px-7 py-3.5 text-sm font-semibold text-ivory transition-all duration-300 ease-smooth hover:bg-ivory/10 active:scale-[0.98]"
+              >
                 See how it works
                 <ChevronDown size={16} />
               </button>
@@ -170,7 +220,7 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
         </button>
       </section>
 
-      {/* === PRODUCT OVERVIEW === */}
+      {/* ================= PRODUCT OVERVIEW ================= */}
       <section id="product" className="relative bg-ivory py-24 lg:py-32">
         <div className="mx-auto max-w-7xl px-6 lg:px-10">
           <RevealBlock>
@@ -179,30 +229,18 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
               Three layers, one connected view.
             </h2>
             <p className="mt-6 max-w-prose-editorial text-lg text-ink-400 leading-relaxed text-pretty">
-              Projects contain tasks. Tasks produce changes. Changes tell the story of where your work actually is. Nexora connects those layers so you never have to assemble the picture yourself.
+              Projects contain tasks. Tasks produce changes. Changes tell the story of where your work actually is. Nexora connects those layers so you never assemble the picture yourself.
             </p>
           </RevealBlock>
 
           <div className="mt-16 grid gap-px overflow-hidden rounded-xl border border-border bg-border lg:grid-cols-3">
             {[
-              {
-                icon: Layers,
-                label: 'Projects',
-                desc: 'Track every initiative with status, ownership, and the milestone that matters next.',
-              },
-              {
-                icon: GitBranch,
-                label: 'Tasks',
-                desc: 'See work in motion — what is in progress, blocked, due soon, or already done.',
-              },
-              {
-                icon: Activity,
-                label: 'Changes',
-                desc: 'A running timeline of who did what, so nothing slips through without a trace.',
-              },
+              { icon: Layers, label: 'Projects', desc: 'Track every initiative with status, ownership, live progress, and the milestone that matters next.' },
+              { icon: ListChecks, label: 'Tasks', desc: 'See work in motion — in progress, blocked, in review, or done — with ownership and real due dates.' },
+              { icon: Activity, label: 'Change Radar', desc: 'A live, honest timeline of who did what, when, and in which project. Momentum, not just deadlines.' },
             ].map((item) => (
-              <RevealBlock key={item.label} className="bg-white p-8 lg:p-10">
-                <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-forest/8">
+              <RevealBlock key={item.label} className="group bg-white p-8 lg:p-10">
+                <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-forest/8 transition-colors duration-300 group-hover:bg-forest/14">
                   <item.icon size={20} className="text-forest" strokeWidth={1.6} />
                 </div>
                 <h3 className="mt-6 font-display text-2xl font-medium text-ink">{item.label}</h3>
@@ -213,26 +251,26 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
         </div>
       </section>
 
-      {/* === KNOW WHAT CHANGED — CHANGE RADAR PREVIEW === */}
+      {/* ================= CHANGE RADAR STORY ================= */}
       <section className="relative overflow-hidden bg-ink py-24 lg:py-32">
-        <div
-          className="absolute inset-0 opacity-20"
-          style={{ backgroundImage: `url(${SECTION_POSTER})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-          aria-hidden="true"
-        />
-        <div className="absolute inset-0 bg-gradient-to-b from-ink via-ink/80 to-ink" aria-hidden="true" />
+        <div className="absolute inset-0 bg-dots-forest opacity-20" aria-hidden="true" />
+        <div className="absolute inset-0 bg-gradient-to-b from-ink via-ink/85 to-ink" aria-hidden="true" />
         <div className="relative mx-auto max-w-7xl px-6 lg:px-10">
           <div className="grid gap-16 lg:grid-cols-2 lg:items-center">
             <RevealBlock>
               <p className="eyebrow text-lime">Change Radar</p>
               <h2 className="mt-4 font-display text-display-lg text-ivory text-balance">
                 Know what changed, not just what is due.
-            </h2>
+              </h2>
               <p className="mt-6 max-w-prose-editorial text-lg text-ivory/70 leading-relaxed text-pretty">
-                Most dashboards tell you what is late. Nexora tells you what moved — who touched what, when it happened, and which project it belongs to. You see momentum, not just deadlines.
+                Most dashboards tell you what is late. Nexora tells you what moved — who touched what, when, and which project it belongs to. Every event is a real, persisted change. Nothing is fabricated.
               </p>
               <ul className="mt-8 space-y-4">
-                {['A readable activity timeline, not a firehose.', 'Every change linked to a project and a person.', 'No manufactured activity — only what actually happened.'].map((line) => (
+                {[
+                  'A readable activity timeline, not a firehose.',
+                  'Every change linked to a project, a task, and a person.',
+                  'Realtime updates as your team works — no refresh needed.',
+                ].map((line) => (
                   <li key={line} className="flex items-start gap-3 text-ivory/80">
                     <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-lime" />
                     <span>{line}</span>
@@ -241,31 +279,29 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
               </ul>
             </RevealBlock>
 
-            <RevealBlock className="rounded-xl border border-ivory/10 bg-ink-800/80 p-6 backdrop-blur-sm lg:p-8">
+            <RevealBlock className="rounded-xl border border-ivory/10 bg-ink-800/70 p-6 lg:p-8">
               <div className="flex items-center justify-between border-b border-ivory/10 pb-4">
-                <span className="text-sm font-semibold text-ivory">Recent activity</span>
-                <span className="text-xs text-ivory/40">Demo data</span>
+                <span className="text-sm font-semibold text-ivory">What the radar surfaces</span>
+                <span className="text-xs text-ivory/40">Live data</span>
               </div>
-              <div className="mt-4 space-y-1">
+              <div className="mt-5 space-y-2">
                 {[
-                  { initials: 'MC', actor: 'Maya Chen', action: 'moved', target: 'Finalize staging env vars', project: 'Atlas Platform', time: '12m', color: 'bg-forest-light' },
-                  { initials: 'EV', actor: 'Elena Voss', action: 'completed', target: 'Performance benchmark', project: 'Mobile Sprint', time: '1h', color: 'bg-lime' },
-                  { initials: 'SO', actor: 'Sam Okoro', action: 'created', target: 'DB migration review', project: 'Atlas Platform', time: '2h', color: 'bg-forest-light' },
-                  { initials: 'JW', actor: 'Jonas Weber', action: 'updated', target: 'Design token audit', project: 'Brand Refresh', time: '3h', color: 'bg-forest-light' },
-                ].map((c) => (
-                  <div key={c.target} className="flex items-center gap-3 rounded-lg px-2 py-3 transition-colors hover:bg-ivory/5">
-                    <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${c.color} text-xs font-semibold ${c.color === 'bg-lime' ? 'text-ink' : 'text-ivory'}`}>
-                      {c.initials}
+                  { icon: Users, label: 'Who', desc: 'Every change attributed to a real person.' },
+                  { icon: GitBranch, label: 'What', desc: 'The exact task or field that moved.' },
+                  { icon: Layers, label: 'Where', desc: 'The project the work belongs to.' },
+                  { icon: Activity, label: 'When', desc: 'Timestamps you can trust, in your local time.' },
+                ].map((row) => (
+                  <div
+                    key={row.label}
+                    className="flex items-center gap-4 rounded-lg px-3 py-3 transition-colors hover:bg-ivory/5"
+                  >
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-forest-light">
+                      <row.icon size={16} className="text-ivory" strokeWidth={1.6} />
                     </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm text-ivory/90">
-                        <span className="font-medium text-ivory">{c.actor}</span>{' '}
-                        <span className="text-ivory/50">{c.action}</span>{' '}
-                        <span className="text-ivory/90">{c.target}</span>
-                      </p>
-                      <p className="truncate text-xs text-ivory/40">{c.project}</p>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-ivory">{row.label}</p>
+                      <p className="text-xs text-ivory/50">{row.desc}</p>
                     </div>
-                    <span className="shrink-0 text-xs text-ivory/40">{c.time}</span>
                   </div>
                 ))}
               </div>
@@ -274,7 +310,7 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
         </div>
       </section>
 
-      {/* === WORKFLOW: PLAN -> EXECUTE -> UNDERSTAND === */}
+      {/* ================= WORKFLOW ================= */}
       <section id="workflow" className="bg-ivory py-24 lg:py-32">
         <div className="mx-auto max-w-7xl px-6 lg:px-10">
           <RevealBlock className="text-center">
@@ -286,7 +322,7 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
 
           <div className="mt-20 grid gap-12 md:grid-cols-3">
             {[
-              { step: '01', title: 'Plan', desc: 'Define projects, assign owners, and set the milestones that matter. Every task has a home.' },
+              { step: '01', title: 'Plan', desc: 'Create a workspace, add projects, assign owners, and set the milestones that matter. Every task has a home.' },
               { step: '02', title: 'Execute', desc: 'Work moves across statuses in the open. Blocked items surface immediately — no silent stalls.' },
               { step: '03', title: 'Understand', desc: 'The Change Radar shows what happened, when, and by whom. You see momentum at a glance.' },
             ].map((phase) => (
@@ -303,43 +339,48 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
         </div>
       </section>
 
-      {/* === TEAM COLLABORATION === */}
-      <section id="team" className="border-y border-border bg-white py-24 lg:py-32">
+      {/* ================= ROLES ================= */}
+      <section id="roles" className="border-y border-border bg-white py-24 lg:py-32">
         <div className="mx-auto max-w-7xl px-6 lg:px-10">
           <div className="grid gap-16 lg:grid-cols-[1fr_1.2fr] lg:items-center">
             <RevealBlock>
               <p className="eyebrow text-forest">Collaboration</p>
               <h2 className="mt-4 font-display text-display-lg text-ink text-balance">
-                Built for teams that work in the open.
+                Everyone sees the same live picture.
               </h2>
               <p className="mt-6 max-w-prose-editorial text-lg text-ink-400 leading-relaxed text-pretty">
-                Ownership is visible. Assignees are clear. When someone picks up a task or hits a wall, the whole team can see it without asking for a status update.
+                Nexora maps real roles to real permissions. Frontend controls respect the backend authorization — so the interface adapts honestly, project by project.
               </p>
-              <p className="mt-4 max-w-prose-editorial text-ink-400 leading-relaxed">
-                No fake live badges, no simulated activity — just an honest, shared view of where the work stands.
-              </p>
+              <ul className="mt-8 space-y-3">
+                {['Secure cookie sessions, hashed passwords.', 'Server-enforced permissions — never just hidden buttons.', 'No fake activity, no fabricated metrics, ever.'].map((line) => (
+                  <li key={line} className="flex items-center gap-3 text-sm text-ink-500">
+                    <ShieldCheck size={16} className="shrink-0 text-forest" />
+                    {line}
+                  </li>
+                ))}
+              </ul>
             </RevealBlock>
 
             <RevealBlock className="grid gap-4 sm:grid-cols-2">
               {[
-                { initials: 'MC', name: 'Maya Chen', role: 'Tech Lead', tasks: 3 },
-                { initials: 'PS', name: 'Priya Sharma', role: 'Product Designer', tasks: 3 },
-                { initials: 'SO', name: 'Sam Okoro', role: 'DevOps Engineer', tasks: 2 },
-                { initials: 'JW', name: 'Jonas Weber', role: 'Brand Designer', tasks: 2 },
+                { icon: Eye, name: 'Viewer', role: 'Read-only clarity for stakeholders.' },
+                { icon: ListChecks, name: 'Team Member', role: 'Commands every permission grants.' },
+                { icon: GitBranch, name: 'Project Manager', role: 'Owns projects, tasks, and assignments.' },
+                { icon: ShieldCheck, name: 'Admin', role: 'Runs the workspace and its members.' },
               ].map((m) => (
-                <div key={m.name} className="card-editorial p-5 hover:shadow-md">
+                <div key={m.name} className="card p-5 hover:shadow-md">
                   <div className="flex items-center gap-3">
-                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-forest text-xs font-semibold text-ivory">
-                      {m.initials}
+                    <div className="flex h-10 w-10 items-center justify-center rounded-full bg-forest text-xs text-ivory">
+                      <m.icon size={17} strokeWidth={1.6} aria-hidden="true" />
                     </div>
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-ink">{m.name}</p>
-                      <p className="truncate text-xs text-ink-400">{m.role}</p>
+                    <div>
+                      <p className="text-sm font-semibold text-ink">{m.name}</p>
+                      <p className="text-xs text-ink-400">{m.role}</p>
                     </div>
                   </div>
                   <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
-                    <span className="text-xs text-ink-400">Active tasks</span>
-                    <span className="text-sm font-semibold text-forest">{m.tasks}</span>
+                    <span className="text-xs text-ink-400">Exact permissions</span>
+                    <span className="text-sm font-semibold text-forest">Defined by the API</span>
                   </div>
                 </div>
               ))}
@@ -348,9 +389,13 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
         </div>
       </section>
 
-      {/* === FINAL CTA === */}
+      {/* ================= FINAL CTA ================= */}
       <section className="relative overflow-hidden bg-forest py-24 lg:py-32">
-        <div className="absolute inset-0 opacity-30" style={{ background: 'radial-gradient(ellipse at 70% 30%, #285847 0%, transparent 60%)' }} aria-hidden="true" />
+        <div
+          className="pointer-events-none absolute inset-0 opacity-40"
+          style={{ background: 'radial-gradient(ellipse at 70% 30%, #285847 0%, transparent 60%)' }}
+          aria-hidden="true"
+        />
         <div className="relative mx-auto max-w-4xl px-6 text-center">
           <RevealBlock>
             <h2 className="mx-auto max-w-2xl font-display text-display-xl text-ivory text-balance">
@@ -363,15 +408,15 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
             </p>
             <div className="mt-10 flex flex-col items-center justify-center gap-3 sm:flex-row">
               <button
-                onClick={onEnterWorkspace}
-                className="inline-flex items-center justify-center gap-2 rounded-lg bg-lime px-6 py-3.5 text-sm font-semibold text-ink transition-all duration-300 ease-smooth hover:bg-lime-dark hover:shadow-xl active:scale-[0.98]"
+                onClick={onEnter}
+                className="group inline-flex items-center justify-center gap-2 rounded-lg bg-lime px-7 py-3.5 text-sm font-semibold text-ink transition-all duration-300 ease-smooth hover:bg-lime-dark hover:shadow-xl active:scale-[0.98]"
               >
-                Open workspace
-                <ArrowRight size={16} />
+                Open the workspace
+                <ArrowRight size={16} className="transition-transform duration-200 group-hover:translate-x-0.5" />
               </button>
               <button
                 onClick={() => scrollToId('product')}
-                className="inline-flex items-center justify-center gap-2 rounded-lg border border-ivory/25 px-6 py-3.5 text-sm font-semibold text-ivory transition-all duration-300 ease-smooth hover:bg-ivory/10 active:scale-[0.98]"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-ivory/25 px-7 py-3.5 text-sm font-semibold text-ivory transition-all duration-300 ease-smooth hover:bg-ivory/10 active:scale-[0.98]"
               >
                 Back to overview
               </button>
@@ -380,21 +425,29 @@ export function HomePage({ onEnterWorkspace }: { onEnterWorkspace: () => void })
         </div>
       </section>
 
-      {/* === FOOTER === */}
+      {/* ================= FOOTER ================= */}
       <footer className="bg-ink py-12">
         <div className="mx-auto max-w-7xl px-6 lg:px-10">
           <div className="flex flex-col items-center justify-between gap-6 border-b border-ivory/10 pb-8 md:flex-row">
             <Logo theme="dark" />
             <nav className="flex flex-wrap items-center justify-center gap-6" aria-label="Footer">
-              <button onClick={() => scrollToId('product')} className="text-sm text-ivory/60 transition-colors hover:text-lime">Product</button>
-              <button onClick={() => scrollToId('workflow')} className="text-sm text-ivory/60 transition-colors hover:text-lime">How it works</button>
-              <button onClick={() => scrollToId('team')} className="text-sm text-ivory/60 transition-colors hover:text-lime">Collaboration</button>
-              <button onClick={onEnterWorkspace} className="text-sm text-ivory/60 transition-colors hover:text-lime">Workspace</button>
+              <button onClick={() => scrollToId('product')} className="text-sm text-ivory/60 transition-colors hover:text-lime">
+                Product
+              </button>
+              <button onClick={() => scrollToId('workflow')} className="text-sm text-ivory/60 transition-colors hover:text-lime">
+                How it works
+              </button>
+              <button onClick={() => scrollToId('roles')} className="text-sm text-ivory/60 transition-colors hover:text-lime">
+                Collaboration
+              </button>
+              <button onClick={onEnter} className="text-sm text-ivory/60 transition-colors hover:text-lime">
+                Workspace
+              </button>
             </nav>
           </div>
           <div className="flex flex-col items-center justify-between gap-4 pt-6 sm:flex-row">
-            <p className="text-xs text-ivory/40">Nexora — The Live Project Command Center</p>
-            <p className="text-xs text-ivory/40">Built with demo data. No live backend connected.</p>
+            <p className="text-xs text-ivory/40">Nexora by Neostats — The Live Project Command Center</p>
+            <p className="text-xs text-ivory/40">Live backend. Secure sessions. No fabricated data.</p>
           </div>
         </div>
       </footer>
