@@ -1,710 +1,1097 @@
-import { useMemo, useState } from 'react';
 import {
-  Search,
-  Bell,
-  ChevronLeft,
+  Activity,
   AlertCircle,
-  Clock,
-  CheckCircle2,
-  FolderOpen,
-  TrendingUp,
-  X,
+  Archive,
   ArrowRight,
-  CircleDot,
-  Loader,
   Ban,
-  Plus,
-  GitBranch,
+  Bell,
+  Calendar,
+  CheckCircle2,
+  ChevronDown,
+  ChevronLeft,
+  CircleDashed,
+  Clock,
+  FolderOpen,
+  GitPullRequest,
+  Layers,
+  ListChecks,
+  Loader2,
+  LogOut,
   MessageSquare,
+  PenLine,
+  Plus,
+  Trash2,
   UserPlus,
-  Edit3,
-  Check,
+  Users,
+  X,
+  type LucideIcon,
 } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { Logo } from '@/components/Logo';
-import {
-  projects as allProjects,
-  tasks as allTasks,
-  changes as allChanges,
-  teamMembers,
-  workspaceStats,
-  type Project,
-  type Task,
-  type TaskStatus,
-  type ProjectStatus,
-  type ChangeEntry,
-} from '@/data/dashboardData';
+import { Dialog } from '@/components/Dialog';
+import { Avatar, Badge, Button, EmptyState, IconButton, ProgressBar, SearchInput, Skeleton, TextField } from '@/components/ui';
+import { useToast } from '@/components/Toaster';
+import { useAuth } from '@/hooks/useAuth';
+import { useDebouncedValue } from '@/hooks/useDebouncedValue';
+import { http } from '@/lib/api';
+import { cx, formatDate, isDueSoon, isOverdue, pluralize, timeAgo, titleCase } from '@/lib/format';
+import { onRealtimeEvent } from '@/lib/socket';
+import { ApiError } from '@/lib/types';
+import type {
+  ActivityItem,
+  AppNotification,
+  DashboardStats,
+  Paginated,
+  Project,
+  ProjectDetail,
+  PublicUser,
+  Task,
+  TaskStatus,
+  Workspace,
+} from '@/lib/types';
 
-const statusConfig: Record<TaskStatus, { label: string; icon: typeof CircleDot; color: string; bg: string }> = {
-  'todo': { label: 'To do', icon: CircleDot, color: 'text-ink-400', bg: 'bg-ink-100' },
-  'in-progress': { label: 'In progress', icon: Loader, color: 'text-forest', bg: 'bg-forest-50' },
-  'blocked': { label: 'Blocked', icon: Ban, color: 'text-danger', bg: 'bg-danger/8' },
-  'done': { label: 'Done', icon: CheckCircle2, color: 'text-forest-light', bg: 'bg-forest-50' },
+const TASK_STATUS: Record<TaskStatus, { label: string; icon: LucideIcon; badge: string }> = {
+  TODO: { label: 'To do', icon: CircleDashed, badge: 'bg-ink-50 text-ink-500' },
+  IN_PROGRESS: { label: 'In progress', icon: Loader2, badge: 'bg-forest/10 text-forest' },
+  BLOCKED: { label: 'Blocked', icon: Ban, badge: 'bg-danger/10 text-danger' },
+  IN_REVIEW: { label: 'In review', icon: GitPullRequest, badge: 'bg-forest-light/10 text-forest-light' },
+  DONE: { label: 'Done', icon: CheckCircle2, badge: 'bg-lime/25 text-forest-700' },
 };
 
-const projectStatusConfig: Record<ProjectStatus, { label: string; color: string; dot: string }> = {
-  'active': { label: 'Active', color: 'text-forest', dot: 'bg-forest' },
-  'on-track': { label: 'On track', color: 'text-forest-light', dot: 'bg-forest-light' },
-  'at-risk': { label: 'At risk', color: 'text-warning', dot: 'bg-warning' },
-  'paused': { label: 'Paused', color: 'text-ink-400', dot: 'bg-ink-300' },
-  'completed': { label: 'Completed', color: 'text-ink-400', dot: 'bg-ink-200' },
+const PROJECT_STATUS: Record<string, { label: string; dot: string; cls: string }> = {
+  PLANNING: { label: 'Planning', dot: 'bg-ink-300', cls: 'text-ink-500' },
+  ACTIVE: { label: 'Active', dot: 'bg-forest', cls: 'text-forest' },
+  ON_HOLD: { label: 'On hold', dot: 'bg-warning', cls: 'text-warning' },
+  COMPLETED: { label: 'Completed', dot: 'bg-lime', cls: 'text-forest-light' },
+  ARCHIVED: { label: 'Archived', dot: 'bg-ink-200', cls: 'text-ink-400' },
 };
 
-const changeIcon: Record<ChangeEntry['type'], typeof GitBranch> = {
-  'created': Plus,
-  'updated': Edit3,
-  'completed': Check,
-  'commented': MessageSquare,
-  'moved': GitBranch,
-  'assigned': UserPlus,
+const ACTIVITY_ICON: Record<string, LucideIcon> = {
+  task_created: PenLine,
+  task_updated: PenLine,
+  task_archived: Archive,
+  comment_created: MessageSquare,
+  comment_updated: MessageSquare,
+  comment_deleted: MessageSquare,
+  project_created: Layers,
+  project_updated: Layers,
+  project_archived: Archive,
+  member_added: UserPlus,
+  member_removed: Users,
+  member_role_changed: Users,
+  workspace_created: Layers,
 };
 
-function isOverdue(task: Task): boolean {
-  const today = new Date('2026-10-10');
-  const due = new Date(`2026-${task.dueDate.replace('Oct', '10').replace('0', '')} 2026`);
-  const [month, day] = task.dueDate.replace('Oct ', '10 ').split(' ');
-  const dueDate = new Date(2026, parseInt(month) - 1, parseInt(day));
-  void today; void due;
-  return task.status !== 'done' && dueDate < new Date(2026, 9, 10);
-}
+export function WorkspacePage({
+  user,
+  onLogout,
+  onHome,
+}: {
+  user: PublicUser;
+  onLogout: () => void;
+  onHome: () => void;
+}) {
+  const toast = useToast();
+  const { refresh } = useAuth();
 
-function isDueSoon(task: Task): boolean {
-  const [month, day] = task.dueDate.replace('Oct ', '10 ').split(' ');
-  const dueDate = new Date(2026, parseInt(month) - 1, parseInt(day));
-  const today = new Date(2026, 9, 10);
-  const diff = (dueDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24);
-  return task.status !== 'done' && diff >= 0 && diff <= 3;
-}
+  // Workspaces + selection
+  const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [workspacesError, setWorkspacesError] = useState<string | null>(null);
 
-export function WorkspacePage({ onExit }: { onExit: () => void }) {
+  // Data
+  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [activity, setActivity] = useState<ActivityItem[] | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unread, setUnread] = useState(0);
+
+  // UI
   const [search, setSearch] = useState('');
+  const deferredSearch = useDebouncedValue(search, 160);
   const [notifOpen, setNotifOpen] = useState(false);
-  const [taskFilter, setTaskFilter] = useState<'all' | TaskStatus>('all');
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [newWsOpen, setNewWsOpen] = useState(false);
+  const [newProjectOpen, setNewProjectOpen] = useState(false);
 
-  const filteredTasks = useMemo(() => {
-    return allTasks.filter((t) => {
-      const matchesSearch =
-        !search ||
-        t.title.toLowerCase().includes(search.toLowerCase()) ||
-        t.projectName.toLowerCase().includes(search.toLowerCase()) ||
-        t.assignee.toLowerCase().includes(search.toLowerCase());
-      const matchesFilter = taskFilter === 'all' || t.status === taskFilter;
-      return matchesSearch && matchesFilter;
+  const loadWorkspaces = useCallback(async () => {
+    try {
+      const res = await http.get<Paginated<Workspace>>('/api/workspaces', { page: 1, pageSize: 100 });
+      const items = res.items;
+      setWorkspaces(items);
+      setWorkspacesError(null);
+      const active = items.find((w) => !w.archivedAt) ?? items[0] ?? null;
+      setWorkspace((prev) => (prev && items.some((w) => w.id === prev.id) ? prev : active));
+    } catch (err) {
+      setWorkspaces([]);
+      setWorkspacesError(err instanceof ApiError ? err.message : 'Could not load workspaces.');
+    }
+  }, []);
+
+  useEffect(() => {
+    loadWorkspaces();
+  }, [loadWorkspaces, refresh]);
+
+  const loadWorkspaceData = useCallback(
+    async (ws: Workspace) => {
+      try {
+        const [dash, proj, notifs, unreadRes] = await Promise.all([
+          http.get<DashboardStats>(`/api/workspaces/${ws.id}/dashboard`),
+          http.get<Paginated<Project>>(`/api/workspaces/${ws.id}/projects`, { page: 1, pageSize: 100 }),
+          http.get<Paginated<AppNotification>>('/api/notifications', { page: 1, pageSize: 50 }),
+          http.get<{ count: number }>('/api/notifications/unread-count'),
+        ]);
+        setStats(dash);
+        setProjects(proj.items);
+        setNotifications(notifs.items);
+        setActivity(dash.recentActivity ?? []);
+        setUnread(unreadRes.count);
+      } catch (err) {
+        toast.error('Could not load workspace', err instanceof ApiError ? err.message : 'Unknown error');
+      }
+    },
+    [toast],
+  );
+
+  useEffect(() => {
+    if (workspace) loadWorkspaceData(workspace);
+  }, [workspace, loadWorkspaceData]);
+
+  // Realtime
+  useEffect(() => {
+    if (!workspace) return;
+    const offActivity = onRealtimeEvent('activity:created', (item) => setActivity((l) => [item, ...(l ?? [])].slice(0, 40)));
+    const offNotif = onRealtimeEvent('notification:new', (n) => {
+      setNotifications((l) => [n, ...l].slice(0, 50));
+      setUnread((u) => u + 1);
     });
-  }, [search, taskFilter]);
+    const offCreated = onRealtimeEvent('project:created', (p) => setProjects((l) => (l ? [p, ...l] : [p])));
+    const offUpdated = onRealtimeEvent('project:updated', (p) => setProjects((l) => (l ? l.map((x) => (x.id === p.id ? p : x)) : l)));
+    const offRole = onRealtimeEvent('workspace:member_role_changed', ({ workspaceId, role }) => {
+      if (workspaceId === workspace.id) setWorkspace((w) => (w ? { ...w, role } : w));
+    });
+    return () => {
+      offActivity();
+      offNotif();
+      offCreated();
+      offUpdated();
+      offRole();
+    };
+  }, [workspace]);
 
-  const filteredProjects = useMemo(() => {
-    if (!search) return allProjects;
-    return allProjects.filter(
-      (p) =>
-        p.name.toLowerCase().includes(search.toLowerCase()) ||
-        p.owner.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [search]);
+  const markRead = useCallback(
+    async (id: string, readAt: string | null) => {
+      setNotifications((l) => l.map((n) => (n.id === id ? { ...n, readAt: readAt ?? n.readAt } : n)));
+      try {
+        if (readAt == null) {
+          const res = await http.patch<{ notification: AppNotification }>(`/api/notifications/${id}/read`);
+          setNotifications((l) => l.map((n) => (n.id === id ? res.notification : n)));
+          setUnread((u) => Math.max(0, u - 1));
+        } else {
+          setUnread((u) => Math.max(0, u - 1));
+        }
+      } catch (err) {
+        toast.error('Could not update notification', err instanceof ApiError ? err.message : undefined);
+      }
+    },
+    [toast],
+  );
 
-  const filteredChanges = useMemo(() => {
-    if (!search) return allChanges;
-    return allChanges.filter(
-      (c) =>
-        c.actor.toLowerCase().includes(search.toLowerCase()) ||
-        c.target.toLowerCase().includes(search.toLowerCase()) ||
-        c.project.toLowerCase().includes(search.toLowerCase())
-    );
-  }, [search]);
+  const readAll = useCallback(async () => {
+    try {
+      await http.post<{ count: number }>('/api/notifications/read-all');
+      setUnread(0);
+      setNotifications((l) => l.map((n) => ({ ...n, readAt: n.readAt ?? new Date().toISOString() })));
+    } catch (err) {
+      toast.error('Could not update notifications', err instanceof ApiError ? err.message : undefined);
+    }
+  }, [toast]);
 
-  const overdueCount = allTasks.filter(isOverdue).length;
-  const dueSoonCount = allTasks.filter(isDueSoon).length;
+  const deleteNotification = useCallback(
+    async (id: string) => {
+      try {
+        await http.delete<void>(`/api/notifications/${id}`);
+        setNotifications((l) => l.filter((n) => n.id !== id));
+      } catch (err) {
+        toast.error('Could not delete notification', err instanceof ApiError ? err.message : undefined);
+      }
+    },
+    [toast],
+  );
+
+  const [drawerProject, setDrawerProject] = useState<{ detail: ProjectDetail; tasks: Task[] } | null>(null);
+
+  const openProject = useCallback(
+    async (project: Project) => {
+      setDrawerProject(null);
+      try {
+        const [detail, tasks] = await Promise.all([
+          http.get<ProjectDetail>(`/api/projects/${project.id}`),
+          http.get<Paginated<Task>>(`/api/projects/${project.id}/tasks`, { page: 1, pageSize: 100 }),
+        ]);
+        setDrawerProject({ detail, tasks: tasks.items });
+      } catch (err) {
+        toast.error('Could not open project', err instanceof ApiError ? err.message : undefined);
+      }
+    },
+    [toast],
+  );
+
+  const closeDrawer = useCallback(() => setDrawerProject(null), []);
+
+  const canManage = workspace?.role === 'ADMIN' || workspace?.role === 'PROJECT_MANAGER';
 
   return (
     <div className="min-h-screen bg-ivory">
-      {/* === WORKSPACE HEADER === */}
-      <header className="sticky top-0 z-30 border-b border-border bg-ivory/95 backdrop-blur-md">
-        <div className="mx-auto max-w-[1400px] px-4 sm:px-6 lg:px-8">
-          <div className="flex h-14 items-center justify-between gap-4">
-            <div className="flex items-center gap-4">
-              <button onClick={onExit} className="flex items-center gap-1.5 text-sm font-medium text-ink-400 transition-colors hover:text-ink" aria-label="Back to homepage">
-                <ChevronLeft size={16} />
-                <span className="hidden sm:inline">Home</span>
-              </button>
-              <div className="h-5 w-px bg-border" />
+      <AppHeader
+        workspaces={workspaces ?? []}
+        workspace={workspace}
+        onSelect={setWorkspace}
+        onNewWorkspace={() => setNewWsOpen(true)}
+        onHome={onHome}
+        search={search}
+        onSearch={setSearch}
+        user={user}
+        onLogout={onLogout}
+        unread={unread}
+        notifications={notifications}
+        notifOpen={notifOpen}
+        setNotifOpen={setNotifOpen}
+        onRead={markRead}
+        onReadAll={readAll}
+        onDelete={deleteNotification}
+      />
+
+      <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
+        {workspaces === null ? (
+          <LoadingGrid />
+        ) : workspaces.length === 0 ? (
+          <EmptyState
+            icon={FolderOpen}
+            title={workspacesError ? 'Could not load workspaces' : 'No workspaces yet'}
+            message={workspacesError ?? 'Create your first workspace to open the command center.'}
+            action={
+              workspacesError ? (
+                <Button variant="secondary" size="sm" onClick={loadWorkspaces}>
+                  Try again
+                </Button>
+              ) : (
+                <Button size="sm" icon={Plus} onClick={() => setNewWsOpen(true)}>
+                  Create workspace
+                </Button>
+              )
+            }
+          />
+        ) : (
+          <>
+            {!workspace ? (
+              <EmptyState icon={FolderOpen} title="Select a workspace" message="Choose a workspace to continue." />
+            ) : (
+              <DashboardView
+                key={workspace.id}
+                workspace={workspace}
+                stats={stats}
+                projects={projects}
+                activity={activity}
+                search={deferredSearch}
+                canManage={canManage}
+                onNewProject={() => setNewProjectOpen(true)}
+                onOpenProject={openProject}
+              />
+            )}
+          </>
+        )}
+
+        <p className="mt-12 text-center text-xs text-ink-400">Nexora by Neostats — real data, live updates.</p>
+      </main>
+
+      {drawerProject && (
+        <ProjectDrawer
+          detail={drawerProject.detail}
+          initialTasks={drawerProject.tasks}
+          onClose={closeDrawer}
+          onChanged={(p) => setProjects((l) => (l ? l.map((x) => (x.id === p.id ? { ...x, ...p } : x)) : l))}
+          canManage={canManage}
+        />
+      )}
+
+      <NewWorkspaceDialog
+        open={newWsOpen}
+        onClose={() => setNewWsOpen(false)}
+        onCreated={(ws) => {
+          setNewWsOpen(false);
+          toast.success('Workspace created', `${ws.name} is ready.`);
+          loadWorkspaces();
+        }}
+      />
+
+      <NewProjectDialog
+        open={newProjectOpen}
+        onClose={() => setNewProjectOpen(false)}
+        workspaceId={workspace?.id}
+        onCreated={(p) => {
+          setNewProjectOpen(false);
+          setProjects((l) => (l ? [p, ...l] : [p]));
+          toast.success('Project created', p.name);
+        }}
+      />
+    </div>
+  );
+}
+
+/* ============================== HEADER ============================== */
+
+function AppHeader(props: {
+  workspaces: Workspace[];
+  workspace: Workspace | null;
+  onSelect: (w: Workspace) => void;
+  onNewWorkspace: () => void;
+  onHome: () => void;
+  search: string;
+  onSearch: (s: string) => void;
+  user: PublicUser;
+  onLogout: () => void;
+  unread: number;
+  notifications: AppNotification[];
+  notifOpen: boolean;
+  setNotifOpen: (b: boolean) => void;
+  onRead: (id: string, readAt: string | null) => void;
+  onReadAll: () => void;
+  onDelete: (id: string) => void;
+}) {
+  const [wsMenuOpen, setWsMenuOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+
+  return (
+    <header className="sticky top-0 z-30 border-b border-border bg-ivory/90 backdrop-blur-md">
+      <div className="mx-auto max-w-[1400px] px-4 sm:px-6 lg:px-8">
+        <div className="flex h-14 items-center justify-between gap-3">
+          <div className="flex min-w-0 items-center gap-3">
+            <button
+              onClick={props.onHome}
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink/5 hover:text-ink"
+              aria-label="Back to homepage"
+            >
+              <ChevronLeft size={18} />
+            </button>
+            <div className="hidden h-5 w-px bg-border sm:block" />
+            <div className="hidden sm:block">
               <Logo />
             </div>
 
-            <div className="flex items-center gap-2">
-              <div className="relative hidden sm:block">
-                <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search projects, tasks, people..."
-                  className="w-56 rounded-lg border border-border bg-white py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-400 transition-all duration-200 focus:w-72 focus:border-forest focus:ring-2 focus:ring-forest/10 focus:outline-none lg:w-64 lg:focus:w-80"
-                  aria-label="Search workspace"
-                />
-              </div>
-
-              <div className="relative">
-                <button
-                  onClick={() => setNotifOpen(!notifOpen)}
-                  className="relative flex h-9 w-9 items-center justify-center rounded-lg text-ink-400 transition-colors hover:bg-ink/5 hover:text-ink"
-                  aria-label="Notifications"
-                  aria-expanded={notifOpen}
-                >
-                  <Bell size={18} />
-                  {overdueCount > 0 && (
-                    <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-danger" />
-                  )}
-                </button>
-                {notifOpen && (
-                  <>
-                    <div className="fixed inset-0 z-30" onClick={() => setNotifOpen(false)} />
-                    <div className="absolute right-0 top-11 z-40 w-80 rounded-xl border border-border bg-white shadow-xl animate-scale-in origin-top-right">
-                      <div className="flex items-center justify-between border-b border-border px-4 py-3">
-                        <span className="text-sm font-semibold text-ink">Notifications</span>
-                        <button onClick={() => setNotifOpen(false)} className="text-ink-400 hover:text-ink" aria-label="Close notifications">
-                          <X size={16} />
-                        </button>
-                      </div>
-                      <div className="max-h-80 overflow-y-auto">
-                        {overdueCount > 0 && (
-                          <div className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-ink/3">
-                            <AlertCircle size={16} className="mt-0.5 shrink-0 text-danger" />
-                            <div>
-                              <p className="text-sm text-ink">{overdueCount} task{overdueCount > 1 ? 's' : ''} overdue</p>
-                              <p className="text-xs text-ink-400">Review and reassign or adjust dates</p>
-                            </div>
-                          </div>
-                        )}
-                        {dueSoonCount > 0 && (
-                          <div className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-ink/3">
-                            <Clock size={16} className="mt-0.5 shrink-0 text-warning" />
-                            <div>
-                              <p className="text-sm text-ink">{dueSoonCount} task{dueSoonCount > 1 ? 's' : ''} due soon</p>
-                              <p className="text-xs text-ink-400">Within the next 3 days</p>
-                            </div>
-                          </div>
-                        )}
-                        {allChanges.slice(0, 3).map((c) => (
-                          <div key={c.id} className="flex items-start gap-3 px-4 py-3 transition-colors hover:bg-ink/3">
-                            <div className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-forest/10 text-[10px] font-semibold text-forest">
-                              {c.actorInitials}
-                            </div>
-                            <div className="min-w-0">
-                              <p className="truncate text-sm text-ink">
-                                <span className="font-medium">{c.actor}</span> {c.action} {c.target}
-                              </p>
-                              <p className="text-xs text-ink-400">{c.timestamp}</p>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-forest text-xs font-semibold text-ivory" title="Demo user">
-                DU
-              </div>
+            {/* Workspace switcher */}
+            <div className="relative ml-1 sm:ml-3">
+              <button
+                onClick={() => setWsMenuOpen((v) => !v)}
+                className="flex h-9 max-w-[16rem] items-center gap-1.5 rounded-lg px-2.5 text-sm font-semibold text-ink transition-colors hover:bg-ink/5"
+                aria-expanded={wsMenuOpen}
+                aria-haspopup="listbox"
+              >
+                <span className="truncate">{props.workspace?.name ?? 'Workspaces'}</span>
+                <ChevronDown size={14} className="shrink-0 text-ink-400" />
+              </button>
+              {wsMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setWsMenuOpen(false)} />
+                  <div className="absolute left-0 top-10 z-40 w-72 rounded-xl border border-border bg-white p-1.5 shadow-xl menu-pop" role="listbox" aria-label="Switch workspace">
+                    <div className="px-2.5 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-400">Workspaces</div>
+                    {props.workspaces.map((w) => (
+                      <button
+                        key={w.id}
+                        role="option"
+                        aria-selected={w.id === props.workspace?.id}
+                        onClick={() => {
+                          props.onSelect(w);
+                          setWsMenuOpen(false);
+                        }}
+                        className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-sm text-ink transition-colors hover:bg-ink/5"
+                      >
+                        <span className="truncate font-medium">{w.name}</span>
+                        <Badge tone={w.role === 'ADMIN' ? 'forest' : w.role === 'PROJECT_MANAGER' ? 'sky' : 'neutral'}>{titleCase(w.role ?? '')}</Badge>
+                      </button>
+                    ))}
+                    <button
+                      onClick={() => {
+                        setWsMenuOpen(false);
+                        props.onNewWorkspace();
+                      }}
+                      className="mt-1 flex w-full items-center gap-2 rounded-lg border-t border-border px-2.5 py-2 text-sm font-semibold text-forest transition-colors hover:bg-forest/5"
+                    >
+                      <Plus size={14} /> New workspace
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
-        </div>
-      </header>
 
-      {/* Mobile search */}
-      <div className="border-b border-border bg-white px-4 py-3 sm:hidden">
-        <div className="relative">
-          <Search size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search..."
-            className="w-full rounded-lg border border-border bg-ivory py-2 pl-9 pr-3 text-sm text-ink placeholder:text-ink-400 focus:border-forest focus:outline-none"
-            aria-label="Search workspace"
-          />
+          <div className="flex items-center gap-2">
+            <div className="relative hidden md:block">
+              <SearchInput value={props.search} onChange={props.onSearch} placeholder="Search projects…" className="w-52 lg:w-64" />
+            </div>
+
+            {/* Notifications */}
+            <div className="relative">
+              <IconButton
+                label="Notifications"
+                icon={Bell}
+                onClick={() => props.setNotifOpen(!props.notifOpen)}
+                aria-expanded={props.notifOpen}
+                className={cx(props.notifOpen ? 'bg-ink/5 text-ink' : '')}
+              />
+              {props.unread > 0 && (
+                <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-danger px-1 text-[10px] font-bold text-white">
+                  {props.unread > 99 ? '99+' : props.unread}
+                </span>
+              )}
+              {props.notifOpen && (
+                <NotificationPanel
+                  notifications={props.notifications}
+                  onClose={() => props.setNotifOpen(false)}
+                  onRead={props.onRead}
+                  onReadAll={props.onReadAll}
+                  onDelete={props.onDelete}
+                />
+              )}
+            </div>
+
+            {/* User menu */}
+            <div className="relative">
+              <button
+                onClick={() => setUserMenuOpen((v) => !v)}
+                className="flex h-9 items-center gap-2 rounded-lg p-1 pr-2 transition-colors hover:bg-ink/5"
+                aria-expanded={userMenuOpen}
+              >
+                <Avatar name={props.user.name} src={props.user.avatarUrl} size="sm" />
+                <span className="hidden max-w-[8rem] truncate text-sm font-medium text-ink lg:inline">{props.user.name}</span>
+                <ChevronDown size={14} className="hidden text-ink-400 lg:block" />
+              </button>
+              {userMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-30" onClick={() => setUserMenuOpen(false)} />
+                  <div className="absolute right-0 top-11 z-40 w-64 rounded-xl border border-border bg-white p-1.5 shadow-xl menu-pop">
+                    <div className="border-b border-border px-3 py-2.5">
+                      <p className="truncate text-sm font-semibold text-ink">{props.user.name}</p>
+                      <p className="truncate text-xs text-ink-400">{props.user.email}</p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setUserMenuOpen(false);
+                        props.onLogout();
+                      }}
+                      className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-ink transition-colors hover:bg-ink/5"
+                    >
+                      <LogOut size={15} /> Sign out
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       </div>
+      {/* Mobile search */}
+      <div className="border-t border-border px-4 py-2 md:hidden">
+        <SearchInput value={props.search} onChange={props.onSearch} placeholder="Search projects…" className="w-full" />
+      </div>
+    </header>
+  );
+}
 
-      <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
-        {/* === PAGE TITLE === */}
-        <div className="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-display text-display-md font-medium text-ink">Command Center</h1>
-              <span className="rounded-md bg-warning/10 px-2 py-0.5 text-xs font-medium text-warning" title="This workspace is using demonstration data">
-                Demo data
-              </span>
-            </div>
-            <p className="mt-1 text-sm text-ink-400">Nexora Workspace — overview of all projects, tasks, and recent activity</p>
+function NotificationPanel(props: {
+  notifications: AppNotification[];
+  onClose: () => void;
+  onRead: (id: string, readAt: string | null) => void;
+  onReadAll: () => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <>
+      <div className="fixed inset-0 z-30" onClick={props.onClose} />
+      <div className="absolute right-0 top-11 z-40 flex max-h-[70vh] w-[22rem] flex-col overflow-hidden rounded-xl border border-border bg-white shadow-xl menu-pop sm:w-96">
+        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+          <span className="text-sm font-semibold text-ink">Notifications</span>
+          <div className="flex items-center gap-1">
+            <button onClick={props.onReadAll} className="rounded-md px-2 py-1 text-xs font-medium text-forest transition-colors hover:bg-forest/5">
+              Mark all read
+            </button>
+            <IconButton label="Close notifications" icon={X} size={15} onClick={props.onClose} className="h-7 w-7" />
           </div>
         </div>
+        <div className="panel-scroll flex-1 overflow-y-auto">
+          {props.notifications.length === 0 ? (
+            <EmptyState icon={Bell} title="All quiet here" message="Notifications will appear when your team acts." className="m-3 border-0 bg-ivory/60 py-10" />
+          ) : (
+            props.notifications.map((n) => {
+              const Icon = NOTIFY_ICON[n.type]?.icon ?? Bell;
+              const unreadN = !n.readAt;
+              return (
+                <div
+                  key={n.id}
+                  className={cx('flex items-start gap-3 border-b border-border px-4 py-3 transition-colors hover:bg-ink/3', !unreadN && 'opacity-75')}
+                >
+                  <span className={cx('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full', unreadN ? 'bg-forest/10' : 'bg-ink-50')}>
+                    <Icon size={15} className={unreadN ? 'text-forest' : 'text-ink-400'} />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className={cx('text-sm leading-snug text-ink', unreadN ? 'font-semibold' : 'font-medium')}>{n.title}</p>
+                    <p className="mt-0.5 text-xs text-ink-400">{n.body}</p>
+                    <p className="mt-1 text-[11px] text-ink-300">{timeAgo(n.createdAt)}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    {unreadN && (
+                      <button
+                        onClick={() => props.onRead(n.id, null)}
+                        className="rounded-md px-1.5 py-1 text-[11px] font-semibold text-forest transition-colors hover:bg-forest/5"
+                      >
+                        Mark read
+                      </button>
+                    )}
+                    <IconButton label="Delete notification" icon={Trash2} size={14} className="h-7 w-7 text-ink-300 hover:text-danger" onClick={() => props.onDelete(n.id)} />
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
 
-        {/* === COMMAND OVERVIEW — STATS === */}
+const NOTIFY_ICON: Record<string, { icon: LucideIcon }> = {
+  TASK_ASSIGNED: { icon: UserPlus },
+  TASK_REASSIGNED: { icon: GitPullRequest },
+  TASK_COMMENTED: { icon: MessageSquare },
+  PROJECT_MEMBER_ADDED: { icon: Users },
+};
+
+/* ============================== DASHBOARD ============================== */
+
+function DashboardView(props: {
+  workspace: Workspace;
+  stats: DashboardStats | null;
+  projects: Project[] | null;
+  activity: ActivityItem[] | null;
+  search: string;
+  canManage: boolean;
+  onNewProject: () => void;
+  onOpenProject: (p: Project) => void;
+}) {
+  const filteredProjects = useMemo(() => {
+    const q = props.search.trim().toLowerCase();
+    if (!q) return props.projects ?? [];
+    return (props.projects ?? []).filter((p) => p.name.toLowerCase().includes(q) || (p.description ?? '').toLowerCase().includes(q));
+  }, [props.projects, props.search]);
+
+  const filteredActivity = useMemo(() => {
+    const q = props.search.trim().toLowerCase();
+    if (!q) return props.activity ?? [];
+    return (props.activity ?? []).filter(
+      (a) =>
+        (a.actor?.name ?? '').toLowerCase().includes(q) ||
+        (a.task?.title ?? '').toLowerCase().includes(q) ||
+        (a.project?.name ?? '').toLowerCase().includes(q) ||
+        (a.summary ?? '').toLowerCase().includes(q),
+    );
+  }, [props.activity, props.search]);
+
+  const searching = props.search.trim().length > 0;
+
+  return (
+    <div>
+      {/* Page title */}
+      <div className="mb-8 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <div className="flex items-center gap-2">
+            <h1 className="font-display text-display-md font-medium text-ink">Command Center</h1>
+            <Badge tone="sky">{titleCase(props.workspace.role ?? '')}</Badge>
+          </div>
+          <p className="mt-1 text-sm text-ink-400">
+            {titleCase(props.workspace.name)} — {props.workspace.description ?? 'one clear picture of every moving part.'}
+          </p>
+        </div>
+        {props.canManage && (
+          <Button icon={Plus} onClick={props.onNewProject} className="self-start sm:self-auto">
+            New project
+          </Button>
+        )}
+      </div>
+
+      {props.stats ? (
+        <KpiGrid stats={props.stats} />
+      ) : (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          <StatCard
-            icon={FolderOpen}
-            label="Active projects"
-            value={workspaceStats.activeProjects}
-            subtext={`${workspaceStats.totalProjects} total`}
-            tone="forest"
-          />
-          <StatCard
-            icon={AlertCircle}
-            label="Overdue"
-            value={workspaceStats.overdueTasks}
-            subtext="Needs attention"
-            tone="danger"
-          />
-          <StatCard
-            icon={Clock}
-            label="Due soon"
-            value={workspaceStats.dueSoonTasks}
-            subtext="Within 3 days"
-            tone="warning"
-          />
-          <StatCard
-            icon={CheckCircle2}
-            label="Completed this week"
-            value={workspaceStats.completedThisWeek}
-            subtext={`${workspaceStats.openTasks} still open`}
-            tone="forest-light"
-          />
+          {[0, 1, 2, 3].map((i) => (
+            <Skeleton key={i} className="h-32 rounded-2xl" />
+          ))}
         </div>
+      )}
 
-        {/* === PROJECT PORTFOLIO === */}
-        <section className="mt-12" aria-label="Project portfolio">
-          <div className="mb-5 flex items-center justify-between">
-            <h2 className="font-display text-2xl font-medium text-ink">Projects</h2>
-            <span className="text-sm text-ink-400">{filteredProjects.length} {filteredProjects.length === 1 ? 'project' : 'projects'}</span>
+      <div className="mt-10 grid gap-8 lg:grid-cols-[1.25fr_1fr]">
+        {/* Projects */}
+        <section aria-label="Projects">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="font-display text-xl font-medium text-ink">Projects</h2>
+            <span className="text-xs text-ink-400">
+              {searching
+                ? `${filteredProjects.length} match${filteredProjects.length === 1 ? '' : 'es'}`
+                : `${filteredProjects.length} ${pluralize(filteredProjects.length, 'project')}`}
+            </span>
           </div>
-
-          {filteredProjects.length === 0 ? (
+          {props.projects === null ? (
+            <div className="space-y-2">
+              {[0, 1, 2].map((i) => (
+                <Skeleton key={i} className="h-20 rounded-xl" />
+              ))}
+            </div>
+          ) : filteredProjects.length === 0 ? (
             <EmptyState
               icon={FolderOpen}
-              title="No projects found"
-              message={search ? `No projects match "${search}".` : 'There are no projects to display.'}
+              title={searching ? 'No matching projects' : 'No projects yet'}
+              message={searching ? 'Try a different search.' : 'Create your first project to start tracking work.'}
+              action={searching ? undefined : props.canManage ? <Button size="sm" icon={Plus} onClick={props.onNewProject}>New project</Button> : undefined}
             />
           ) : (
             <div className="space-y-2">
-              {filteredProjects.map((project) => (
-                <ProjectRow
-                  key={project.id}
-                  project={project}
-                  onClick={() => setSelectedProject(project)}
-                />
+              {filteredProjects.map((p) => (
+                <ProjectRow key={p.id} project={p} onClick={() => props.onOpenProject(p)} />
               ))}
             </div>
           )}
         </section>
 
-        {/* === TASK COMMAND CENTER === */}
-        <section className="mt-12" aria-label="Task command center">
-          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h2 className="font-display text-2xl font-medium text-ink">Tasks</h2>
-            <div className="flex flex-wrap gap-1.5">
-              {(['all', 'todo', 'in-progress', 'blocked', 'done'] as const).map((f) => (
-                <button
-                  key={f}
-                  onClick={() => setTaskFilter(f)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
-                    taskFilter === f
-                      ? 'bg-forest text-ivory'
-                      : 'bg-white text-ink-400 border border-border hover:border-ink-200 hover:text-ink'
-                  }`}
-                >
-                  {f === 'all' ? 'All' : statusConfig[f].label}
-                </button>
-              ))}
-            </div>
+        {/* Change Radar */}
+        <section aria-label="Change Radar">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="font-display text-xl font-medium text-ink">Change Radar</h2>
+            <span className="text-xs text-ink-400">Recent activity</span>
           </div>
-
-          {filteredTasks.length === 0 ? (
-            <EmptyState
-              icon={CheckCircle2}
-              title="No tasks found"
-              message={search ? `No tasks match "${search}".` : 'There are no tasks in this view.'}
-            />
+          {props.activity === null ? (
+            <Skeleton className="h-80 rounded-2xl" />
+          ) : filteredActivity.length === 0 ? (
+            <EmptyState icon={Activity} title={searching ? 'No matching changes' : 'No activity yet'} message={searching ? 'Try a different search.' : 'Changes will appear here as your team works.'} />
           ) : (
-            <div className="hidden overflow-hidden rounded-xl border border-border lg:block">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-border bg-ink-50 text-left">
-                    <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Task</th>
-                    <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Status</th>
-                    <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Priority</th>
-                    <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Assignee</th>
-                    <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Due</th>
-                    <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wide text-ink-400">Project</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredTasks.map((task) => {
-                    const sc = statusConfig[task.status];
-                    const overdue = isOverdue(task);
-                    const dueSoon = isDueSoon(task);
-                    return (
-                      <tr key={task.id} className="border-b border-border last:border-0 transition-colors hover:bg-ink-50/50">
-                        <td className="px-4 py-3.5">
-                          <div className="flex items-center gap-2.5">
-                            <sc.icon size={15} className={`shrink-0 ${sc.color}`} />
-                            <span className="font-medium text-ink">{task.title}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium ${sc.bg} ${sc.color}`}>
-                            {sc.label}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <PriorityBadge priority={task.priority} />
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <div className="flex items-center gap-2">
-                            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-forest/10 text-[10px] font-semibold text-forest">
-                              {task.assigneeInitials}
-                            </div>
-                            <span className="text-ink-400">{task.assignee}</span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span className={`text-sm ${overdue ? 'font-medium text-danger' : dueSoon ? 'font-medium text-warning' : 'text-ink-400'}`}>
-                            {task.dueDate}
-                            {overdue && ' (overdue)'}
-                            {dueSoon && !overdue && ' (soon)'}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3.5">
-                          <span className="text-ink-400">{task.projectName}</span>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-
-          {/* Mobile task cards */}
-          {filteredTasks.length > 0 && (
-            <div className="space-y-3 lg:hidden">
-              {filteredTasks.map((task) => {
-                const sc = statusConfig[task.status];
-                const overdue = isOverdue(task);
-                const dueSoon = isDueSoon(task);
-                return (
-                  <div key={task.id} className="card-editorial p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex items-start gap-2.5">
-                        <sc.icon size={15} className={`mt-0.5 shrink-0 ${sc.color}`} />
-                        <div>
-                          <p className="font-medium text-ink">{task.title}</p>
-                          <p className="mt-0.5 text-xs text-ink-400">{task.projectName}</p>
-                        </div>
-                      </div>
-                      <PriorityBadge priority={task.priority} />
-                    </div>
-                    <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-                      <div className="flex items-center gap-2">
-                        <div className="flex h-6 w-6 items-center justify-center rounded-full bg-forest/10 text-[10px] font-semibold text-forest">
-                          {task.assigneeInitials}
-                        </div>
-                        <span className={`inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium ${sc.bg} ${sc.color}`}>
-                          {sc.label}
-                        </span>
-                      </div>
-                      <span className={`text-xs ${overdue ? 'font-medium text-danger' : dueSoon ? 'font-medium text-warning' : 'text-ink-400'}`}>
-                        {task.dueDate}{overdue ? ' (overdue)' : dueSoon ? ' (soon)' : ''}
-                      </span>
-                    </div>
-                  </div>
-                );
-              })}
+            <div className="card p-5">
+              <ActivityTimeline items={filteredActivity} />
             </div>
           )}
         </section>
+      </div>
 
-        {/* === CHANGE RADAR + TEAM === */}
-        <div className="mt-12 grid gap-8 lg:grid-cols-[1.4fr_1fr]">
-          {/* Change Radar */}
-          <section aria-label="Change Radar">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="font-display text-2xl font-medium text-ink">Change Radar</h2>
-              <span className="text-xs text-ink-400">Recent activity</span>
-            </div>
-            {filteredChanges.length === 0 ? (
-              <EmptyState
-                icon={TrendingUp}
-                title="No recent changes"
-                message={search ? `No changes match "${search}".` : 'There is no recent activity to display.'}
-              />
-            ) : (
-              <div className="card-editorial p-6">
-                <div className="relative space-y-0">
-                  {filteredChanges.map((change, idx) => {
-                    const Icon = changeIcon[change.type];
-                    const isLast = idx === filteredChanges.length - 1;
-                    return (
-                      <div key={change.id} className="flex gap-4">
-                        <div className="flex flex-col items-center">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-white">
-                            <Icon size={14} className="text-forest" />
-                          </div>
-                          {!isLast && <div className="w-px flex-1 bg-border" />}
-                        </div>
-                        <div className={`flex-1 pb-6 ${isLast ? 'pb-0' : ''}`}>
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="text-sm text-ink">
-                              <span className="font-medium">{change.actor}</span>{' '}
-                              <span className="text-ink-400">{change.action}</span>{' '}
-                              <span className="font-medium">{change.target}</span>
-                            </p>
-                            <span className="shrink-0 text-xs text-ink-400">{change.timestamp}</span>
-                          </div>
-                          <p className="mt-1 text-xs text-ink-400">{change.project}</p>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </section>
-
-          {/* Team */}
-          <section aria-label="Team">
-            <div className="mb-5 flex items-center justify-between">
-              <h2 className="font-display text-2xl font-medium text-ink">Team</h2>
-              <span className="text-xs text-ink-400">{teamMembers.length} members</span>
-            </div>
-            <div className="card-editorial divide-y divide-border">
-              {teamMembers.map((m) => (
-                <div key={m.id} className="flex items-center justify-between p-4 transition-colors hover:bg-ink-50/50">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-full bg-forest text-xs font-semibold text-ivory">
-                      {m.initials}
-                    </div>
-                    <div>
-                      <p className="text-sm font-medium text-ink">{m.name}</p>
-                      <p className="text-xs text-ink-400">{m.role}</p>
-                    </div>
+      {/* Recent tasks */}
+      {props.stats && props.stats.recentTasks.length > 0 && (
+        <section className="mt-10" aria-label="Recently updated tasks">
+          <h2 className="mb-4 font-display text-xl font-medium text-ink">Recently updated tasks</h2>
+          <div className="card divide-y divide-border overflow-hidden">
+            {props.stats.recentTasks.map((t) => {
+              const sc = TASK_STATUS[t.status];
+              return (
+                <div key={t.id} className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-ink/3">
+                  <sc.icon size={15} className="shrink-0 text-ink-400" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-ink">{t.title}</p>
+                    <p className="truncate text-xs text-ink-400">{t.project.name}</p>
                   </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-forest">{m.activeTasks}</p>
-                    <p className="text-[10px] text-ink-400">active</p>
-                  </div>
+                  <Badge tone={sc.badge.includes('danger') ? 'danger' : sc.badge.includes('lime') ? 'lime' : sc.badge.includes('forest') ? 'forest' : 'neutral'}>{sc.label}</Badge>
+                  <span className="hidden w-24 shrink-0 text-right text-xs text-ink-400 sm:block">{timeAgo(t.updatedAt)}</span>
                 </div>
-              ))}
-            </div>
-          </section>
-        </div>
-
-        <div className="mt-12 border-t border-border pt-6">
-          <p className="text-xs text-ink-400">
-            This workspace uses demonstration data. No live backend or real-time connection is active.
-          </p>
-        </div>
-      </main>
-
-      {/* === PROJECT DETAIL DRAWER === */}
-      {selectedProject && (
-        <ProjectDrawer project={selectedProject} tasks={allTasks} onClose={() => setSelectedProject(null)} />
+              );
+            })}
+          </div>
+        </section>
       )}
     </div>
   );
 }
 
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  subtext,
-  tone,
-}: {
-  icon: typeof FolderOpen;
-  label: string;
-  value: number;
-  subtext: string;
-  tone: 'forest' | 'danger' | 'warning' | 'forest-light';
-}) {
-  const tones = {
-    'forest': 'bg-forest/8 text-forest',
-    'danger': 'bg-danger/8 text-danger',
-    'warning': 'bg-warning/8 text-warning',
-    'forest-light': 'bg-forest-light/8 text-forest-light',
-  };
+function KpiGrid({ stats }: { stats: DashboardStats }) {
+  const s = stats.summary;
+  const cards = [
+    { icon: FolderOpen, label: 'Active projects', value: s.projects, hint: `${s.members} ${pluralize(s.members, 'member')}`, tone: 'bg-forest/8 text-forest' },
+    { icon: ListChecks, label: 'Open tasks', value: s.totalTasks, hint: `${s.totalDone} done · ${s.completionRate}% complete`, tone: 'bg-forest-light/10 text-forest-light' },
+    { icon: AlertCircle, label: 'Overdue', value: s.overdueTasks, hint: 'Needs attention', tone: 'bg-danger/10 text-danger' },
+    { icon: Clock, label: 'Due soon', value: s.dueSoonTasks, hint: 'Within 7 days', tone: 'bg-warning/10 text-warning' },
+  ];
   return (
-    <div className="card-editorial p-5 transition-all duration-300 hover:shadow-md">
-      <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${tones[tone]}`}>
-        <Icon size={18} strokeWidth={1.8} />
-      </div>
-      <p className="mt-4 text-3xl font-display font-medium text-ink">{value}</p>
-      <p className="mt-1 text-sm font-medium text-ink">{label}</p>
-      <p className="mt-0.5 text-xs text-ink-400">{subtext}</p>
+    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      {cards.map(({ icon: Icon, label, value, hint, tone }) => (
+        <div key={label} className="group card relative overflow-hidden p-5 transition-shadow hover:shadow-lg">
+          <div className={cx('flex h-10 w-10 items-center justify-center rounded-lg transition-transform duration-300 group-hover:scale-105', tone)}>
+            <Icon size={18} strokeWidth={1.8} />
+          </div>
+          <p className="ticker-value mt-4 font-display text-3xl font-medium text-ink">{value}</p>
+          <p className="mt-1 text-sm font-medium text-ink">{label}</p>
+          <p className="mt-0.5 text-xs text-ink-400">{hint}</p>
+        </div>
+      ))}
     </div>
-  );
-}
-
-function PriorityBadge({ priority }: { priority: Task['priority'] }) {
-  const config = {
-    'low': { label: 'Low', color: 'text-ink-400', bg: 'bg-ink-100' },
-    'medium': { label: 'Medium', color: 'text-ink-500', bg: 'bg-ink-100' },
-    'high': { label: 'High', color: 'text-forest', bg: 'bg-forest-50' },
-    'urgent': { label: 'Urgent', color: 'text-danger', bg: 'bg-danger/8' },
-  };
-  const c = config[priority];
-  return (
-    <span className={`inline-flex items-center rounded-md px-2 py-0.5 text-xs font-medium ${c.bg} ${c.color}`}>
-      {c.label}
-    </span>
   );
 }
 
 function ProjectRow({ project, onClick }: { project: Project; onClick: () => void }) {
-  const sc = projectStatusConfig[project.status];
+  const sc = PROJECT_STATUS[project.status] ?? PROJECT_STATUS.PLANNING;
   return (
     <button
       onClick={onClick}
-      className="group flex w-full items-center gap-4 rounded-xl border border-border bg-white p-4 text-left transition-all duration-300 hover:shadow-md hover:border-ink-200 sm:p-5"
+      className="group flex w-full items-center gap-4 rounded-2xl border border-border bg-white p-4 text-left transition-all duration-200 ease-smooth hover:border-ink-200 hover:shadow-lg sm:p-5"
     >
       <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2.5">
-          <span className={`h-2 w-2 shrink-0 rounded-full ${sc.dot}`} />
+        <div className="flex flex-wrap items-center gap-2.5">
+          <span className={cx('h-2 w-2 shrink-0 rounded-full', sc.dot)} />
           <h3 className="truncate font-medium text-ink">{project.name}</h3>
+          {project.dueDate && (
+            <span className={cx('hidden items-center gap-1 text-xs font-medium sm:inline-flex', project.dueDate < new Date().toISOString() ? 'text-danger' : 'text-ink-400')}>
+              <Calendar size={12} /> {formatDate(project.dueDate)}
+            </span>
+          )}
         </div>
-        <p className="mt-1 truncate text-xs text-ink-400 sm:ml-[18px]">
-          Next: {project.nextMilestone} — {project.milestoneDate}
-        </p>
+        {project.description && <p className="mt-1 truncate text-xs text-ink-400 sm:pl-[18px]">{project.description}</p>}
       </div>
 
-      <div className="hidden items-center gap-2 sm:flex">
-        <div className="flex h-7 w-7 items-center justify-center rounded-full bg-forest/10 text-[10px] font-semibold text-forest">
-          {project.ownerInitials}
-        </div>
-        <span className="text-xs text-ink-400">{project.owner}</span>
-      </div>
-
-      <div className="hidden w-32 md:block">
+      <div className="hidden w-40 shrink-0 md:block">
         <div className="flex items-center justify-between text-xs">
-          <span className="text-ink-400">{project.openTasks} open</span>
+          <span className="text-ink-400">
+            {project.tasksCount != null ? `${project.tasksCount} ${pluralize(project.tasksCount, 'task')}` : '—'}
+          </span>
           <span className="font-medium text-ink">{project.progress}%</span>
         </div>
-        <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-ink-100">
-          <div
-            className="h-full rounded-full transition-all duration-500"
-            style={{
-              width: `${project.progress}%`,
-              backgroundColor: project.status === 'at-risk' ? '#B87924' : project.status === 'completed' ? '#A7B0A0' : '#285847',
-            }}
-          />
-        </div>
+        <ProgressBar value={project.progress} tone={project.status === 'ON_HOLD' ? 'warning' : 'forest'} className="mt-1.5" />
       </div>
 
-      <span className={`hidden shrink-0 rounded-md px-2.5 py-1 text-xs font-medium sm:inline-flex ${sc.color} bg-ink-50`}>
+      <Badge tone={sc.cls.includes('warning') ? 'warning' : sc.cls.includes('forest') ? 'forest' : 'neutral'} className="hidden sm:inline-flex">
         {sc.label}
-      </span>
+      </Badge>
 
-      <ArrowRight size={16} className="shrink-0 text-ink-300 transition-colors group-hover:text-ink" />
+      <ArrowRight size={16} className="shrink-0 text-ink-300 transition-transform duration-200 group-hover:translate-x-0.5 group-hover:text-ink" />
     </button>
   );
 }
 
-function EmptyState({ icon: Icon, title, message }: { icon: typeof FolderOpen; title: string; message: string }) {
+function ActivityTimeline({ items }: { items: ActivityItem[] }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-border bg-white py-16 text-center">
-      <div className="flex h-12 w-12 items-center justify-center rounded-full bg-ink-50">
-        <Icon size={20} className="text-ink-300" />
-      </div>
-      <p className="mt-4 font-medium text-ink">{title}</p>
-      <p className="mt-1 text-sm text-ink-400">{message}</p>
+    <div className="space-y-0">
+      {items.map((a, idx) => {
+        const Icon = ACTIVITY_ICON[a.action] ?? CircleDashed;
+        const isLast = idx === items.length - 1;
+        return (
+          <div key={a.id} className="flex gap-3.5">
+            <div className="flex flex-col items-center">
+              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-white">
+                <Icon size={14} className="text-forest" />
+              </span>
+              {!isLast && <span className="w-px flex-1 bg-border" />}
+            </div>
+            <div className={cx('min-w-0 flex-1', isLast ? '' : 'pb-4')}>
+              <p className="text-sm leading-snug text-ink">
+                <span className="font-medium">{a.actor?.name ?? 'Someone'}</span>{' '}
+                <span className="text-ink-400">{titleCase(a.action.replace(/_/g, ' '))}</span>{' '}
+                <span className="font-medium">{a.task?.title ?? a.project?.name ?? titleCase(a.entityType.replace(/_/g, ' '))}</span>
+              </p>
+              <p className="mt-0.5 text-xs text-ink-400">
+                {timeAgo(a.createdAt)}
+                {a.project?.name && <span className="inline-flex items-center gap-1"><span aria-hidden="true">·</span>{a.project.name}</span>}
+              </p>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
-function ProjectDrawer({ project, tasks, onClose }: { project: Project; tasks: Task[]; onClose: () => void }) {
-  const projectTasks = tasks.filter((t) => t.projectName === project.name);
-  const sc = projectStatusConfig[project.status];
+function LoadingGrid() {
+  return (
+    <div className="grid gap-4 lg:grid-cols-4">
+      {[0, 1, 2, 3].map((i) => (
+        <Skeleton key={i} className="h-32 rounded-2xl" />
+      ))}
+    </div>
+  );
+}
+
+/* ============================== PROJECT DRAWER ============================== */
+
+function ProjectDrawer(props: {
+  detail: ProjectDetail;
+  initialTasks: Task[];
+  onClose: () => void;
+  onChanged: (p: Project) => void;
+  canManage: boolean;
+}) {
+  const toast = useToast();
+  const [tasks, setTasks] = useState<Task[]>(props.initialTasks);
+  const [project, setProject] = useState(props.detail.project);
+  const [taskTitle, setTaskTitle] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTasks(props.initialTasks);
+    setProject(props.detail.project);
+  }, [props.detail, props.initialTasks]);
+
+  const sc = PROJECT_STATUS[project.status] ?? PROJECT_STATUS.PLANNING;
+
+  const patchStatus = useCallback(
+    async (task: Task, status: TaskStatus) => {
+      if (!props.canManage || task.status === status || updatingId) return;
+      setUpdatingId(task.id);
+      // Optimistic
+      const prev = tasks;
+      setTasks((l) => l.map((t) => (t.id === task.id ? { ...t, status } : t)));
+      try {
+        const res = await http.patch<{ task: Task }>(`/api/tasks/${task.id}`, { version: task.version, status });
+        setTasks((l) => l.map((t) => (t.id === task.id ? { ...res.task, assignee: task.assignee } : t)));
+        props.onChanged(project);
+      } catch (err) {
+        setTasks(prev);
+        if (err instanceof ApiError && err.code === 'VERSION_CONFLICT') {
+          toast.error('This task changed elsewhere', `Current version is ${err.currentVersion ?? 'unknown'}. Reloading…`);
+          http.get<{ task: Task }>(`/api/tasks/${task.id}`).then((r) => {
+            setTasks((l) => l.map((t) => (t.id === task.id ? { ...r.task, assignee: task.assignee } : t)));
+            toast.info('Task refreshed', 'Your view now matches the latest changes.');
+          });
+        } else if (err instanceof ApiError) {
+          toast.error('Update failed', err.message);
+        }
+      } finally {
+        setUpdatingId(null);
+      }
+    },
+    [props.canManage, updatingId, tasks, project, toast],
+  );
+
+  const createTask = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      if (!taskTitle.trim() || creating) return;
+      setCreating(true);
+      try {
+        const res = await http.post<{ task: Task }>(`/api/projects/${project.id}/tasks`, { title: taskTitle.trim() });
+        setTasks((l) => [res.task, ...l]);
+        setTaskTitle('');
+        props.onChanged(project);
+        toast.success('Task created', res.task.title);
+      } catch (err) {
+        toast.error('Could not create task', err instanceof ApiError ? err.message : undefined);
+      } finally {
+        setCreating(false);
+      }
+    },
+    [taskTitle, creating, project, props, toast],
+  );
 
   return (
     <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label={`Project: ${project.name}`}>
-      <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm animate-fade-in" onClick={onClose} />
-      <div className="absolute right-0 top-0 h-full w-full max-w-md overflow-y-auto bg-ivory shadow-2xl animate-slide-in-right">
-        <div className="sticky top-0 flex items-center justify-between border-b border-border bg-ivory/95 px-6 py-4 backdrop-blur">
+      <div className="absolute inset-0 bg-ink/40 backdrop-blur-sm fade-overlay" onClick={props.onClose} />
+      <div className="panel-scroll absolute right-0 top-0 flex h-full w-full max-w-xl flex-col overflow-y-auto bg-ivory shadow-2xl drawer-in">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-border bg-ivory/90 px-6 py-4 backdrop-blur">
           <Logo />
-          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-ink-400 hover:bg-ink/5 hover:text-ink" aria-label="Close project details">
-            <X size={18} />
-          </button>
+          <IconButton label="Close project details" icon={X} onClick={props.onClose} />
         </div>
-        <div className="px-6 py-6">
-          <div className="flex items-center gap-2.5">
-            <span className={`h-2.5 w-2.5 rounded-full ${sc.dot}`} />
-            <span className={`text-xs font-medium ${sc.color}`}>{sc.label}</span>
+
+        <div className="flex-1 px-6 py-6">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <span className={cx('h-2.5 w-2.5 rounded-full', sc.dot)} />
+            <span className={cx('text-xs font-medium', sc.cls)}>{sc.label}</span>
+            <Badge tone="neutral">{(project.priority ?? 'MEDIUM').replace('_', ' ')} priority</Badge>
           </div>
           <h2 className="mt-3 font-display text-2xl font-medium text-ink">{project.name}</h2>
-          <div className="mt-4 flex items-center gap-2">
-            <div className="flex h-8 w-8 items-center justify-center rounded-full bg-forest text-xs font-semibold text-ivory">
-              {project.ownerInitials}
-            </div>
-            <span className="text-sm text-ink-400">Led by {project.owner}</span>
-          </div>
-
-          <div className="mt-6">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-ink-400">Progress</span>
-              <span className="font-medium text-ink">{project.progress}%</span>
-            </div>
-            <div className="mt-2 h-2 overflow-hidden rounded-full bg-ink-100">
-              <div
-                className="h-full rounded-full transition-all duration-500"
-                style={{
-                  width: `${project.progress}%`,
-                  backgroundColor: project.status === 'at-risk' ? '#B87924' : '#285847',
-                }}
-              />
-            </div>
-          </div>
+          {project.description && <p className="mt-2 text-sm leading-relaxed text-ink-400">{project.description}</p>}
 
           <div className="mt-6 grid grid-cols-2 gap-4">
-            <div className="rounded-lg border border-border bg-white p-4">
-              <p className="text-xs text-ink-400">Total tasks</p>
-              <p className="mt-1 text-2xl font-display font-medium text-ink">{project.taskCount}</p>
+            <div className="rounded-xl border border-border bg-white p-4">
+              <p className="text-xs text-ink-400">Progress</p>
+              <div className="mt-1.5 flex items-center justify-between text-sm">
+                <span className="font-medium text-ink">{project.progress}%</span>
+              </div>
+              <ProgressBar value={project.progress} className="mt-2" />
             </div>
-            <div className="rounded-lg border border-border bg-white p-4">
-              <p className="text-xs text-ink-400">Open tasks</p>
-              <p className="mt-1 text-2xl font-display font-medium text-ink">{project.openTasks}</p>
+            <div className="rounded-xl border border-border bg-white p-4">
+              <p className="text-xs text-ink-400">Target date</p>
+              <p className="mt-1.5 text-sm font-medium text-ink">{formatDate(project.dueDate)}</p>
             </div>
           </div>
 
-          <div className="mt-6 rounded-lg border border-border bg-white p-4">
-            <p className="text-xs text-ink-400">Next milestone</p>
-            <p className="mt-1 font-medium text-ink">{project.nextMilestone}</p>
-            <p className="mt-0.5 text-sm text-ink-400">{project.milestoneDate}</p>
-          </div>
-
-          {projectTasks.length > 0 && (
+          {props.detail.members.length > 0 && (
             <div className="mt-6">
-              <h3 className="mb-3 text-sm font-semibold text-ink">Tasks in this project</h3>
-              <div className="space-y-2">
-                {projectTasks.map((task) => {
-                  const tsc = statusConfig[task.status];
+              <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-ink-400">Team</h3>
+              <div className="flex flex-wrap gap-2">
+                {props.detail.members.map((m) => (
+                  <span key={m.id} className="inline-flex items-center gap-2 rounded-full border border-border bg-white py-1 pl-1 pr-3 text-xs font-medium text-ink">
+                    <Avatar name={m.user.name} src={m.user.avatarUrl} size="xs" />
+                    {m.user.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Tasks */}
+          <div className="mt-8">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-ink">
+                Tasks <span className="text-ink-400">({tasks.length})</span>
+              </h3>
+            </div>
+
+            {props.canManage && (
+              <form onSubmit={createTask} className="mb-4 flex items-center gap-2">
+                <input
+                  value={taskTitle}
+                  onChange={(e) => setTaskTitle(e.target.value)}
+                  placeholder="Add a task…"
+                  aria-label="New task title"
+                  className="h-9 w-full rounded-xl border border-border bg-white px-3 text-sm text-ink placeholder:text-ink-300 focus:border-forest focus:outline-none focus:ring-2 focus:ring-forest/10"
+                />
+                <Button type="submit" size="sm" loading={creating} icon={Plus} disabled={!taskTitle.trim()}>
+                  Add
+                </Button>
+              </form>
+            )}
+
+            {tasks.length === 0 ? (
+              <EmptyState icon={ListChecks} title="No tasks yet" message={props.canManage ? 'Add the first task above.' : 'Nothing here yet.'} className="bg-white py-10" />
+            ) : (
+              <div className="space-y-1.5">
+                {tasks.map((task) => {
+                  const tsc = TASK_STATUS[task.status];
+                  const overdue = isOverdue(task.dueDate, task.status);
+                  const dueSoon = isDueSoon(task.dueDate, task.status);
                   return (
-                    <div key={task.id} className="flex items-center gap-3 rounded-lg border border-border bg-white p-3">
-                      <tsc.icon size={14} className={`shrink-0 ${tsc.color}`} />
+                    <div key={task.id} className="flex items-center gap-3 rounded-xl border border-border bg-white p-3 transition-colors hover:bg-white">
+                      <div className={cx('flex h-8 w-8 shrink-0 items-center justify-center rounded-lg', tsc.badge)}>
+                        <tsc.icon size={15} />
+                      </div>
                       <div className="min-w-0 flex-1">
                         <p className="truncate text-sm font-medium text-ink">{task.title}</p>
-                        <p className="text-xs text-ink-400">{task.dueDate}</p>
+                        <p className="mt-0.5 flex items-center gap-2 text-xs text-ink-400">
+                          {task.assignee?.name && <span className="flex items-center gap-1"><Avatar name={task.assignee.name} src={task.assignee.avatarUrl} size="xs" />{task.assignee.name}</span>}
+                          {task.dueDate && (
+                            <span className={cx('inline-flex items-center gap-1', overdue ? 'font-medium text-danger' : dueSoon ? 'font-medium text-warning' : '')}>
+                              <Calendar size={11} /> {formatDate(task.dueDate)}
+                              {overdue && '(overdue)'}
+                            </span>
+                          )}
+                        </p>
                       </div>
-                      <span className={`shrink-0 rounded-md px-2 py-0.5 text-xs font-medium ${tsc.bg} ${tsc.color}`}>
-                        {tsc.label}
-                      </span>
+                      <Badge tone={tsc.badge.includes('danger') ? 'danger' : tsc.badge.includes('lime') ? 'lime' : tsc.badge.includes('forest') ? 'forest' : 'neutral'}>{tsc.label}</Badge>
+                      {props.canManage && (
+                        <button
+                          onClick={() => patchStatus(task, nextStatus(task.status))}
+                          disabled={updatingId === task.id}
+                          className="rounded-lg px-2 py-1 text-[11px] font-semibold text-forest transition-colors hover:bg-forest/5 disabled:opacity-40"
+                          aria-label={`Move ${task.title} to ${TASK_STATUS[nextStatus(task.status)].label}`}
+                          title={task.status === 'DONE' ? 'Reopen task' : `Move to ${TASK_STATUS[nextStatus(task.status)].label}`}
+                        >
+                          {task.status === 'DONE' ? 'Reopen' : 'Next →'}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
               </div>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function nextStatus(s: TaskStatus): TaskStatus {
+  const map: Record<TaskStatus, TaskStatus> = {
+    TODO: 'IN_PROGRESS',
+    IN_PROGRESS: 'IN_REVIEW',
+    IN_REVIEW: 'DONE',
+    DONE: 'TODO',
+    BLOCKED: 'IN_PROGRESS',
+  };
+  return map[s];
+}
+
+/* ============================== DIALOGS ============================== */
+
+function NewWorkspaceDialog(props: { open: boolean; onClose: () => void; onCreated: (w: Workspace) => void }) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!name.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await http.post<{ workspace: Workspace }>('/api/workspaces', { name: name.trim(), description: description.trim() || undefined });
+      props.onCreated(res.workspace);
+      setName('');
+      setDescription('');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not create workspace.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={props.open} onClose={props.onClose} title="Create workspace">
+      <form onSubmit={submit} className="space-y-4">
+        <TextField label="Name" id="ws-name" placeholder="Acme Engineering" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        <TextField label="Description (optional)" id="ws-desc" placeholder="What is this workspace for?" value={description} onChange={(e) => setDescription(e.target.value)} />
+        {error && <p className="text-sm font-medium text-danger" role="alert">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <Button type="button" variant="secondary" onClick={props.onClose}>Cancel</Button>
+          <Button type="submit" loading={busy} disabled={!name.trim()}>Create workspace</Button>
+        </div>
+      </form>
+    </Dialog>
+  );
+}
+
+function NewProjectDialog(props: { open: boolean; onClose: () => void; workspaceId?: string; onCreated: (p: Project) => void }) {
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [dueDate, setDueDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!props.workspaceId || !name.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const body: Record<string, unknown> = { name: name.trim(), description: description.trim() || undefined };
+      if (dueDate) body.dueDate = new Date(dueDate).toISOString();
+      const res = await http.post<{ project: Project }>(`/api/workspaces/${props.workspaceId}/projects`, body);
+      props.onCreated(res.project);
+      setName('');
+      setDescription('');
+      setDueDate('');
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not create project.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Dialog open={props.open} onClose={props.onClose} title="New project">
+      <form onSubmit={submit} className="space-y-4">
+        <TextField label="Name" id="proj-name" placeholder="Platform migration" value={name} onChange={(e) => setName(e.target.value)} autoFocus />
+        <TextField label="Description (optional)" id="proj-desc" placeholder="A short summary of the goal" value={description} onChange={(e) => setDescription(e.target.value)} />
+        <div>
+          <label htmlFor="proj-due" className="mb-1.5 block text-xs font-semibold text-ink">Target date (optional)</label>
+          <input id="proj-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="input-field" />
+        </div>
+        {error && <p className="text-sm font-medium text-danger" role="alert">{error}</p>}
+        <div className="flex justify-end gap-2 pt-1">
+          <Button type="button" variant="secondary" onClick={props.onClose}>Cancel</Button>
+          <Button type="submit" loading={busy} disabled={!name.trim()}>Create project</Button>
+        </div>
+      </form>
+    </Dialog>
   );
 }
