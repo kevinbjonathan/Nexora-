@@ -82,6 +82,25 @@ const ACTIVITY_ICON: Record<string, LucideIcon> = {
   workspace_created: Layers,
 };
 
+/** Renders each record once even if a realtime event and a later refetch overlap. */
+function dedupeById<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.id)) continue;
+    seen.add(item.id);
+    out.push(item);
+  }
+  return out;
+}
+
+/** Prepends `item` if its id is not already present, then trims to `limit`. */
+function prependUnique<T extends { id: string }>(list: T[] | null, item: T, limit: number): T[] {
+  const current = list ?? [];
+  if (current.some((x) => x.id === item.id)) return current;
+  return [item, ...current].slice(0, limit);
+}
+
 export function WorkspacePage({
   user,
   onLogout,
@@ -143,7 +162,7 @@ export function WorkspacePage({
         setStats(dash);
         setProjects(proj.items);
         setNotifications(notifs.items);
-        setActivity(dash.recentActivity ?? []);
+        setActivity(dedupeById(dash.recentActivity ?? []));
         setUnread(unreadRes.count);
       } catch (err) {
         toast.error('Could not load workspace', err instanceof ApiError ? err.message : 'Unknown error');
@@ -159,9 +178,9 @@ export function WorkspacePage({
   // Realtime
   useEffect(() => {
     if (!workspace) return;
-    const offActivity = onRealtimeEvent('activity:created', (item) => setActivity((l) => [item, ...(l ?? [])].slice(0, 40)));
+    const offActivity = onRealtimeEvent('activity:created', (item) => setActivity((l) => prependUnique(l, item, 40)));
     const offNotif = onRealtimeEvent('notification:new', (n) => {
-      setNotifications((l) => [n, ...l].slice(0, 50));
+      setNotifications((l) => prependUnique(l, n, 50));
       setUnread((u) => u + 1);
     });
     const offCreated = onRealtimeEvent('project:created', (p) => setProjects((l) => (l ? [p, ...l] : [p])));
@@ -264,23 +283,19 @@ export function WorkspacePage({
       <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-8">
         {workspaces === null ? (
           <LoadingGrid />
-        ) : workspaces.length === 0 ? (
+        ) : workspacesError ? (
           <EmptyState
             icon={FolderOpen}
-            title={workspacesError ? 'Could not load workspaces' : 'No workspaces yet'}
-            message={workspacesError ?? 'Create your first workspace to open the command center.'}
+            title="Could not load workspaces"
+            message={workspacesError}
             action={
-              workspacesError ? (
-                <Button variant="secondary" size="sm" onClick={loadWorkspaces}>
-                  Try again
-                </Button>
-              ) : (
-                <Button size="sm" icon={Plus} onClick={() => setNewWsOpen(true)}>
-                  Create workspace
-                </Button>
-              )
+              <Button variant="secondary" size="sm" onClick={loadWorkspaces}>
+                Try again
+              </Button>
             }
           />
+        ) : workspaces.length === 0 ? (
+          <OnboardingView user={user} onStart={() => setNewWsOpen(true)} />
         ) : (
           <>
             {!workspace ? (
@@ -714,14 +729,28 @@ function KpiGrid({ stats }: { stats: DashboardStats }) {
   ];
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-      {cards.map(({ icon: Icon, label, value, hint, tone }) => (
+      {cards.map(({ icon: Icon, label, value, hint, tone }, i) => (
         <div key={label} className="group card relative overflow-hidden p-5 transition-shadow hover:shadow-lg">
-          <div className={cx('flex h-10 w-10 items-center justify-center rounded-lg transition-transform duration-300 group-hover:scale-105', tone)}>
-            <Icon size={18} strokeWidth={1.8} />
+          <div className="flex items-start justify-between gap-2">
+            <div className={cx('flex h-10 w-10 items-center justify-center rounded-lg transition-transform duration-300 group-hover:scale-105', tone)}>
+              <Icon size={18} strokeWidth={1.8} />
+            </div>
+            {i === 1 && s.tasksCompletedThisWeek > 0 && (
+              <span className="rounded-md bg-lime/25 px-1.5 py-0.5 text-[10px] font-semibold text-forest-700">
+                +{s.tasksCompletedThisWeek} this week
+              </span>
+            )}
           </div>
           <p className="ticker-value mt-4 font-display text-3xl font-medium text-ink">{value}</p>
           <p className="mt-1 text-sm font-medium text-ink">{label}</p>
-          <p className="mt-0.5 text-xs text-ink-400">{hint}</p>
+          {i === 1 ? (
+            <div className="mt-2">
+              <ProgressBar value={s.completionRate} tone="forest" />
+              <p className="mt-1.5 text-xs text-ink-400">{hint}</p>
+            </div>
+          ) : (
+            <p className="mt-0.5 text-xs text-ink-400">{hint}</p>
+          )}
         </div>
       ))}
     </div>
@@ -740,7 +769,7 @@ function ProjectRow({ project, onClick }: { project: Project; onClick: () => voi
           <span className={cx('h-2 w-2 shrink-0 rounded-full', sc.dot)} />
           <h3 className="truncate font-medium text-ink">{project.name}</h3>
           {project.dueDate && (
-            <span className={cx('hidden items-center gap-1 text-xs font-medium sm:inline-flex', project.dueDate < new Date().toISOString() ? 'text-danger' : 'text-ink-400')}>
+            <span className={cx('inline-flex items-center gap-1 text-xs font-medium', isOverdue(project.dueDate, project.status === 'COMPLETED' ? 'DONE' : project.status) ? 'text-danger' : 'text-ink-400')}>
               <Calendar size={12} /> {formatDate(project.dueDate)}
             </span>
           )}
@@ -748,7 +777,7 @@ function ProjectRow({ project, onClick }: { project: Project; onClick: () => voi
         {project.description && <p className="mt-1 truncate text-xs text-ink-400 sm:pl-[18px]">{project.description}</p>}
       </div>
 
-      <div className="hidden w-40 shrink-0 md:block">
+      <div className="hidden shrink-0 sm:block sm:w-36 md:w-40">
         <div className="flex items-center justify-between text-xs">
           <span className="text-ink-400">
             {project.tasksCount != null ? `${project.tasksCount} ${pluralize(project.tasksCount, 'task')}` : '—'}
@@ -767,35 +796,68 @@ function ProjectRow({ project, onClick }: { project: Project; onClick: () => voi
   );
 }
 
+/** Human-readable detail for an activity record (e.g. the status change). */
+function activityDetail(a: ActivityItem): string | null {
+  const md = a.metadata as Record<string, unknown> | null;
+  if (!md) return null;
+  const changes = md.changes as Record<string, { from?: unknown; to?: unknown }> | undefined;
+  if (changes && typeof changes === 'object') {
+    const parts: string[] = [];
+    for (const [field, delta] of Object.entries(changes)) {
+      if (!delta || typeof delta !== 'object') continue;
+      const from = typeof delta.from === 'string' ? titleCase(delta.from) : delta.from == null ? 'None' : null;
+      const to = typeof delta.to === 'string' ? titleCase(delta.to) : delta.to == null ? 'None' : null;
+      parts.push(`${titleCase(field)}: ${from ?? '—'} → ${to ?? '—'}`);
+    }
+    if (parts.length) return parts.join(' · ');
+  }
+  if (typeof md.status === 'string') return `Status: ${titleCase(md.status)}`;
+  return null;
+}
+
 function ActivityTimeline({ items }: { items: ActivityItem[] }) {
   return (
-    <div className="space-y-0">
+    <ol>
       {items.map((a, idx) => {
         const Icon = ACTIVITY_ICON[a.action] ?? CircleDashed;
         const isLast = idx === items.length - 1;
+        const detail = activityDetail(a);
+        const subject = a.task?.title ?? a.project?.name ?? titleCase(a.entityType);
         return (
-          <div key={a.id} className="flex gap-3.5">
+          <li key={a.id} className="flex gap-3.5">
             <div className="flex flex-col items-center">
-              <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-border bg-white">
-                <Icon size={14} className="text-forest" />
+              <span className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-white">
+                <Icon size={15} className="text-forest" />
+                {a.actor && (
+                  <span className="absolute -bottom-1 -right-1 ring-2 ring-white">
+                    <Avatar name={a.actor.name} src={a.actor.avatarUrl} size="xs" />
+                  </span>
+                )}
               </span>
               {!isLast && <span className="w-px flex-1 bg-border" />}
             </div>
-            <div className={cx('min-w-0 flex-1', isLast ? '' : 'pb-4')}>
+            <div className={cx('min-w-0 flex-1', isLast ? '' : 'pb-5')}>
               <p className="text-sm leading-snug text-ink">
-                <span className="font-medium">{a.actor?.name ?? 'Someone'}</span>{' '}
-                <span className="text-ink-400">{titleCase(a.action.replace(/_/g, ' '))}</span>{' '}
-                <span className="font-medium">{a.task?.title ?? a.project?.name ?? titleCase(a.entityType.replace(/_/g, ' '))}</span>
+                <span className="font-semibold">{a.actor?.name ?? 'Someone'}</span>{' '}
+                <span className="text-ink-400">{titleCase(a.action)}</span>{' '}
+                <span className="font-medium">{subject}</span>
               </p>
-              <p className="mt-0.5 text-xs text-ink-400">
-                {timeAgo(a.createdAt)}
-                {a.project?.name && <span className="inline-flex items-center gap-1"><span aria-hidden="true">·</span>{a.project.name}</span>}
+              {detail && (
+                <p className="mt-1.5 inline-flex rounded-md bg-ink/5 px-2 py-0.5 text-[11px] font-medium text-ink-500">
+                  {detail}
+                </p>
+              )}
+              <p className="mt-1 text-xs text-ink-400">
+                <time dateTime={a.createdAt} title={new Date(a.createdAt).toLocaleString()}>
+                  {timeAgo(a.createdAt)}
+                </time>
+                {a.project?.name && a.task && <span> · {a.project.name}</span>}
               </p>
             </div>
-          </div>
+          </li>
         );
       })}
-    </div>
+    </ol>
   );
 }
 
@@ -805,6 +867,51 @@ function LoadingGrid() {
       {[0, 1, 2, 3].map((i) => (
         <Skeleton key={i} className="h-32 rounded-2xl" />
       ))}
+    </div>
+  );
+}
+
+/* ============================== ONBOARDING ============================== */
+
+function OnboardingView({ user, onStart }: { user: PublicUser; onStart: () => void }) {
+  const firstName = user.name.trim().split(/\s+/)[0] || 'there';
+  const steps = [
+    { icon: FolderOpen, title: 'Create a workspace', body: 'One home for every project, task and teammate.' },
+    { icon: ListChecks, title: 'Add projects & tasks', body: 'Track work through To do, In progress, Review and Done.' },
+    { icon: UserPlus, title: 'Invite your team', body: 'Assign roles — you start as the workspace admin.' },
+  ];
+  return (
+    <div className="mx-auto max-w-3xl py-4 sm:py-8">
+      <div className="card overflow-hidden p-7 sm:p-11">
+        <p className="eyebrow text-forest">First-time setup</p>
+        <h1 className="mt-2 font-display text-display-md font-medium text-ink">Welcome, {firstName}.</h1>
+        <p className="mt-3 max-w-xl text-sm leading-relaxed text-ink-400 sm:text-base">
+          You are one step from your command center. Create your first workspace — you will be its administrator,
+          and you can invite the rest of your team afterwards.
+        </p>
+
+        <div className="mt-8 grid gap-4 sm:grid-cols-3">
+          {steps.map(({ icon: Icon, title, body }, i) => (
+            <div key={title} className="rounded-2xl border border-border bg-ivory/50 p-4">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-forest/8 text-forest">
+                  <Icon size={17} strokeWidth={1.8} />
+                </span>
+                <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-300">Step {i + 1}</span>
+              </div>
+              <p className="mt-3 text-sm font-semibold text-ink">{title}</p>
+              <p className="mt-1 text-xs leading-relaxed text-ink-400">{body}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-8 flex flex-wrap items-center gap-3">
+          <Button size="lg" icon={Plus} onClick={onStart}>
+            Create your workspace
+          </Button>
+          <span className="text-xs text-ink-400">Takes less than a minute.</span>
+        </div>
+      </div>
     </div>
   );
 }

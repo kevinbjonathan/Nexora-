@@ -253,7 +253,9 @@ export async function updateTask(userId: string, taskId: string, input: UpdateTa
     }
   });
 
-  emitToProject(current.projectId, "task:updated", serializeTask(updated));
+  // Emit once per update. Every project member is also a workspace member, so
+  // emitting to the workspace room alone avoids delivering the same event twice
+  // to a socket that is joined to both the project and workspace rooms.
   emitToWorkspace(access.workspaceId, "task:updated", serializeTask(updated));
 
   return serializeTask(updated);
