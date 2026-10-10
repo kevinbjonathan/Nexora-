@@ -1,35 +1,48 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
-type Route = 'home' | 'workspace';
-
-interface RouterState {
-  route: Route;
-  navigate: (route: Route) => void;
-}
+export type Route = 'home' | 'login' | 'signup' | 'workspace';
 
 const ROUTE_MAP: Record<string, Route> = {
   '/': 'home',
+  '/login': 'login',
+  '/signup': 'signup',
   '/workspace': 'workspace',
 };
 
 const ROUTE_TO_HASH: Record<Route, string> = {
   home: '/',
+  login: '/login',
+  signup: '/signup',
   workspace: '/workspace',
 };
 
-export function useRouter(): RouterState {
-  const currentHash = window.location.hash.replace(/^#/, '') || '/';
-  const route = ROUTE_MAP[currentHash] ?? 'home';
-
-  const navigate = (next: Route) => {
-    window.location.hash = ROUTE_TO_HASH[next];
+export function useRouter(): { route: Route; navigate: (next: Route) => void; replace: (next: Route) => void } {
+  const getRoute = (): Route => {
+    const hash = window.location.hash.replace(/^#/, '') || '/';
+    return ROUTE_MAP[hash] ?? 'home';
   };
 
+  const [route, setRoute] = useState<Route>(getRoute);
+
   useEffect(() => {
+    const onHash = () => setRoute(getRoute());
+    window.addEventListener('hashchange', onHash);
     if (!ROUTE_MAP[window.location.hash.replace(/^#/, '') || '/']) {
-      window.location.hash = '/';
+      window.location.hash = ROUTE_TO_HASH.home;
     }
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
 
-  return { route, navigate };
+  const navigate = (next: Route) => {
+    if (window.location.hash.replace(/^#/, '') === ROUTE_TO_HASH[next]) return;
+    window.location.hash = ROUTE_TO_HASH[next];
+    setRoute(next);
+  };
+
+  const replace = (next: Route) => {
+    window.history.replaceState(null, '', `#${ROUTE_TO_HASH[next]}`);
+    setRoute(next);
+  };
+
+  return { route, navigate, replace };
 }
