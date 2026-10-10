@@ -152,6 +152,7 @@ export interface DashboardSummary {
   completionRate: number;
   overdueTasks: number;
   dueSoonTasks: number;
+  dueSoonProjects: number;
   projects: number;
   members: number;
   tasksCompletedThisWeek: number;

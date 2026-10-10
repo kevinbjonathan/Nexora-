@@ -725,7 +725,13 @@ function KpiGrid({ stats }: { stats: DashboardStats }) {
     { icon: FolderOpen, label: 'Active projects', value: s.projects, hint: `${s.members} ${pluralize(s.members, 'member')}`, tone: 'bg-forest/8 text-forest' },
     { icon: ListChecks, label: 'Open tasks', value: s.totalTasks, hint: `${s.totalDone} done · ${s.completionRate}% complete`, tone: 'bg-forest-light/10 text-forest-light' },
     { icon: AlertCircle, label: 'Overdue', value: s.overdueTasks, hint: 'Needs attention', tone: 'bg-danger/10 text-danger' },
-    { icon: Clock, label: 'Due soon', value: s.dueSoonTasks, hint: 'Within 7 days', tone: 'bg-warning/10 text-warning' },
+    {
+      icon: Clock,
+      label: 'Due soon',
+      value: s.dueSoonTasks + s.dueSoonProjects,
+      hint: `Next 7 days · ${s.dueSoonTasks} ${pluralize(s.dueSoonTasks, 'task')} · ${s.dueSoonProjects} ${pluralize(s.dueSoonProjects, 'project')}`,
+      tone: 'bg-warning/10 text-warning',
+    },
   ];
   return (
     <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -838,7 +844,7 @@ function ActivityTimeline({ items }: { items: ActivityItem[] }) {
             </div>
             <div className={cx('min-w-0 flex-1', isLast ? '' : 'pb-5')}>
               <p className="text-sm leading-snug text-ink">
-                <span className="font-semibold">{a.actor?.name ?? 'Someone'}</span>{' '}
+                <span className="font-semibold">{a.actor?.name ?? 'Unknown user'}</span>{' '}
                 <span className="text-ink-400">{titleCase(a.action)}</span>{' '}
                 <span className="font-medium">{subject}</span>
               </p>
